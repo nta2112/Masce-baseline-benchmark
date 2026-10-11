@@ -1,0 +1,45 @@
+﻿# Vanilla LlamaGen-L Benchmark Configuration (No MASC, No UPipe, Standard Flat Vocab)
+# ----------------------------------------------------------------------------------
+# Dùng để so sánh trực tiếp (Ablation Baseline) với MASC + UPipe.
+#
+# Đặc điểm:
+#   - Flat Vocabulary: N = 16,384 (chuẩn gốc của tokenizer LlamaGen)
+#   - Standard Attention: Không băm nhỏ head (Vanilla FlashAttention / PyTorch SDPA)
+#   - Fine-tune trên cùng 10 classes x 1,000 ảnh = 10,000 ảnh
+# ----------------------------------------------------------------------------------
+
+backbone:
+  name: llamagen_l
+  params: 343M
+  image_size: 256
+  vocab_size: 16384    # Flat full vocabulary (MASC dùng k=4096)
+  pretrained: /kaggle/working/weights/c2i_L_256.pt
+  freeze_layers: 0     # Full unfreeze 24 layers như MASC pipeline
+
+masc:
+  enabled: false       # Tắt MASC: dự đoán trực tiếp token phẳng 16,384
+
+upipe:
+  enabled: false       # Tắt UPipe: kiểm chứng mức ngốn VRAM và tốc độ gốc
+
+optimizer:
+  name: adamw
+  peak_lr: 1.0e-4
+  final_lr: 1.0e-5
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.05
+
+train:
+  epochs: 15.0
+  total_steps: null
+  global_batch_size: 32
+  local_batch_size: 16
+  grad_clip: 1.0
+  amp: true
+  amp_dtype: float16
+  ckpt_every: 2500
+  grad_checkpointing: true
+
+num_workers: 4
+log_every: 50
