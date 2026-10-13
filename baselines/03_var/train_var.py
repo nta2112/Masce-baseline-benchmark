@@ -95,15 +95,14 @@ def extract_var_tokens_from_llamagen_codes(
     if var_repo_dir not in sys.path:
         sys.path.insert(0, var_repo_dir)
 
-    from models import build_vae_var
+    from models.vqvae import VQVAE
 
-    # 1. Load VAR VAE
+    # 1. Load VAR VAE directly (no VAR transformer in memory)
     patch_nums = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16)
-    var_vae, _ = build_vae_var(
-        V=4096, Cvae=32, ch=160, share_quant_resi=4,
-        device=device, patch_nums=patch_nums,
-        num_classes=1000, depth=16,
-    )
+    var_vae = VQVAE(
+        vocab_size=4096, Cvae=32, ch=160, share_quant_resi=4,
+        v_patch_nums=patch_nums, test_mode=True,
+    ).to(device)
     vae_state = torch.load(var_vae_ckpt, map_location='cpu')
     var_vae.load_state_dict(vae_state.get('model', vae_state), strict=True)
     var_vae.eval()
@@ -120,18 +119,17 @@ def extract_var_tokens_from_llamagen_codes(
     labels = np.load(os.path.join(llamagen_codes_dir, "labels.npy"))
     all_codes = np.concatenate([np.load(f) for f in shards], axis=0)
 
-    print(f"[Extract] Converting {len(all_codes)} samples from LlamaGen codes -> VAR tokens...")
+    print(f"[Extract] Converting {len(all_codes)} samples from LlamaGen codes -> VAR tokens (safe bs={batch_size})...")
     all_var_tokens = []
     num_batches = (len(all_codes) + batch_size - 1) // batch_size
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for b in range(num_batches):
             b_codes = torch.from_numpy(all_codes[b * batch_size : (b + 1) * batch_size]).to(device).long()
             cur_bs = len(b_codes)
 
             # Decode to images [-1, 1]
-            imgs = llamagen_vae.decode_code(b_codes, [cur_bs, 8, 16, 16])
-            imgs = imgs.clamp(-1, 1)
+            imgs = llamagen_vae.decode_code(b_codes, [cur_bs, 8, 16, 16]).clamp(-1, 1)
 
             # Encode with VAR VAE
             gt_idx_Bl = var_vae.img_to_idxBl(imgs)
