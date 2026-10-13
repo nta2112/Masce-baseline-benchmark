@@ -1,0 +1,22 @@
+# Weights & Data Caches
+*.pth
+*.pt
+*.npz
+*.npy
+*.tar
+wds_cache/
+codes/
+checkpoints/
+checkpoints_var/
+results/
+samples/
+
+# Sub-repositories
+baselines/03_var/VAR/
+LlamaGen/
+VAR/
+
+# Python Cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
