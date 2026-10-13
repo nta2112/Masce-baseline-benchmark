@@ -100,7 +100,7 @@ def extract_var_tokens_from_llamagen_codes(
     # 1. Load VAR VAE directly (no VAR transformer in memory)
     patch_nums = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16)
     var_vae = VQVAE(
-        vocab_size=4096, Cvae=32, ch=160, share_quant_resi=4,
+        vocab_size=4096, z_channels=32, ch=160, share_quant_resi=4,
         v_patch_nums=patch_nums, test_mode=True,
     ).to(device)
     vae_state = torch.load(var_vae_ckpt, map_location='cpu')
