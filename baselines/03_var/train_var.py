@@ -221,10 +221,15 @@ def train_var(args):
         if is_master:
             print(f"[Model] Warning: {args.var_ckpt} not found, initializing from scratch.")
 
-    # Freeze VAE completely
+    # Freeze VAE and delete unused encoder/decoder to save ~450MB VRAM
     vae.eval()
     for p in vae.parameters():
         p.requires_grad = False
+    if hasattr(vae, 'encoder'): del vae.encoder
+    if hasattr(vae, 'decoder'): del vae.decoder
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # VAR is trainable
     var.train()
@@ -308,20 +313,22 @@ def train_var(args):
                 x_BLCv_wo_first_l = vae.quantize.idxBl_to_var_input(gt_idx_Bl)
 
             # Forward pass
-            optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=args.fp16):
                 logits_BLV = var_model(label_B, x_BLCv_wo_first_l)
-                loss = F.cross_entropy(logits_BLV.view(-1, 4096), gt_BL.view(-1))
+                raw_loss = F.cross_entropy(logits_BLV.view(-1, 4096), gt_BL.view(-1))
+                loss = raw_loss / args.grad_accum
 
-            # Backward pass
+            # Backward pass with gradient accumulation
             scaler.scale(loss).backward()
-            if args.grad_clip > 0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+            if (step + 1) % args.grad_accum == 0 or (step + 1) == steps_per_epoch:
+                if args.grad_clip > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
 
-            epoch_loss += loss.item() * B
+            epoch_loss += raw_loss.item() * B
             epoch_samples += B
 
             if is_master and (global_step % args.log_every == 0 or step == steps_per_epoch - 1):
@@ -331,7 +338,7 @@ def train_var(args):
                 mem1 = torch.cuda.max_memory_allocated(1) / 1e9 if torch.cuda.device_count() > 1 else mem0
                 print(
                     f"Epoch [{ep_progress:5.2f}/{args.epochs:.0f}] | Step {global_step:5d}/{total_steps} | "
-                    f"Loss: {loss.item():.4f} | LR: {cur_lr:.2e} | Speed: {speed:5.1f} smp/s | "
+                    f"Loss: {raw_loss.item():.4f} | LR: {cur_lr:.2e} | Speed: {speed:5.1f} smp/s | "
                     f"VRAM [GPU0: {mem0:.2f}GB, GPU1: {mem1:.2f}GB]"
                 )
 
@@ -391,7 +398,8 @@ def parse_args():
 
     # Training hyperparameters
     parser.add_argument("--epochs", type=float, default=20.0, help="Number of epochs (default 20.0)")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size per GPU")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size per GPU (default 8, safe for T4)")
+    parser.add_argument("--grad-accum", type=int, default=2, help="Gradient accumulation steps (Global batch = bs * gpus * accum)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Peak learning rate")
     parser.add_argument("--min-lr", type=float, default=1e-6, help="Minimum learning rate")
     parser.add_argument("--warmup-steps", type=int, default=100, help="Warmup steps")
