@@ -3,6 +3,7 @@
 Fine-tune VAR (Visual AutoRegressive) for 20 Epochs on 10-Class ImageNet Benchmark.
 
 Matching MASC Stage 2 Fine-Tuning Protocol:
+- Multi-GPU: DistributedDataParallel (DDP) across 2x NVIDIA T4 via torchrun
 - Architecture: VAR-d16 (~310M parameters) + Multi-Scale VQ-VAE (V=4096)
 - Dataset: 10 ImageNet Classes (0..9), 1,000 samples/class = 10,000 samples total
 - Training: 20 epochs, AdamW (lr=1e-4 with Cosine Annealing), FP16 mixed precision
@@ -149,7 +150,7 @@ def extract_var_tokens_from_llamagen_codes(
 # Training Loop
 # ---------------------------------------------------------------------------
 def train_var(args):
-    # Distributed setup
+    # Distributed setup for Multi-GPU (2x T4 on Kaggle)
     is_dist = 'RANK' in os.environ and 'WORLD_SIZE' in os.environ
     if is_dist:
         rank = int(os.environ['RANK'])
@@ -159,17 +160,23 @@ def train_var(args):
         device = f"cuda:{local_rank}"
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
         is_master = (rank == 0)
+        gpu_name = torch.cuda.get_device_name(local_rank) if torch.cuda.is_available() else "Unknown"
+        print(f"[DDP Rank {rank}/{world_size}] Active on GPU {local_rank}: {gpu_name}")
     else:
         rank = 0
         world_size = 1
         local_rank = 0
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         is_master = True
+        gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+        print(f"[Single-GPU] Active on: {device} ({gpu_name})")
 
     if is_master:
         print("=" * 70)
         print(" VAR 20-EPOCH FINE-TUNING ON 10-CLASS IMAGENET BENCHMARK")
-        print(f" Device: {device} | World Size: {world_size} | Epochs: {args.epochs}")
+        print(f" Multi-GPU Active: {world_size} GPU(s) in Parallel via PyTorch DDP")
+        print(f" Batch Size per GPU: {args.batch_size} | Global Batch Size: {args.batch_size * world_size}")
+        print(f" Target Epochs: {args.epochs}")
         print("=" * 70)
 
     # Add VAR repo to sys.path
@@ -194,6 +201,8 @@ def train_var(args):
         depth=args.depth,
         shared_aln=False,
     )
+    vae = vae.to(device)
+    var = var.to(device)
 
     # Load pretrained VAE
     if os.path.exists(args.vae_ckpt):
@@ -257,8 +266,8 @@ def train_var(args):
     total_steps = int(args.epochs * steps_per_epoch)
     if is_master:
         print(f"[Data] Loaded {len(dataset):,} samples ({len(dataset)//args.num_train_classes} per class)")
-        print(f"[Data] Batch size: {args.batch_size}/GPU (Global: {args.batch_size * world_size})")
-        print(f"[Data] Steps per epoch: {steps_per_epoch} | Total steps for {args.epochs} epochs: {total_steps:,}")
+        print(f"[Data] Samples per GPU: {len(dataset)//world_size:,} | Steps per epoch: {steps_per_epoch}")
+        print(f"[Data] Total steps for {args.epochs} epochs: {total_steps:,}")
 
     # 3. Optimizer & Scaler
     optimizer = torch.optim.AdamW(
@@ -319,11 +328,13 @@ def train_var(args):
 
             if is_master and (global_step % args.log_every == 0 or step == steps_per_epoch - 1):
                 ep_progress = (epoch - 1) + (step + 1) / steps_per_epoch
-                speed = epoch_samples / (time.time() - ep_t0)
-                mem = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0
+                speed = (epoch_samples * world_size) / max(0.001, time.time() - ep_t0)
+                mem0 = torch.cuda.max_memory_allocated(0) / 1e9 if torch.cuda.is_available() else 0
+                mem1 = torch.cuda.max_memory_allocated(1) / 1e9 if torch.cuda.device_count() > 1 else mem0
                 print(
                     f"Epoch [{ep_progress:5.2f}/{args.epochs:.0f}] | Step {global_step:5d}/{total_steps} | "
-                    f"Loss: {loss.item():.4f} | LR: {cur_lr:.2e} | Speed: {speed:5.1f} smp/s | VRAM: {mem:.2f}GB"
+                    f"Loss: {loss.item():.4f} | LR: {cur_lr:.2e} | Speed: {speed:5.1f} smp/s | "
+                    f"VRAM [GPU0: {mem0:.2f}GB, GPU1: {mem1:.2f}GB]"
                 )
 
         avg_ep_loss = epoch_loss / max(1, epoch_samples)
@@ -356,7 +367,7 @@ def train_var(args):
         }, final_path)
         total_time = (time.time() - t0) / 60
         print("=" * 70)
-        print(f" TRAINING COMPLETED IN {total_time:.1f} MINUTES!")
+        print(f" 2-GPU TRAINING COMPLETED IN {total_time:.1f} MINUTES!")
         print(f" Final Checkpoint: {final_path}")
         print("=" * 70)
 
