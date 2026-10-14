@@ -130,6 +130,7 @@ def main():
         lr=opt_cfg["peak_lr"], betas=tuple(opt_cfg.get("betas", (0.9, 0.95))),
         eps=float(opt_cfg.get("eps", 1e-8)), weight_decay=opt_cfg.get("weight_decay", 0.05)
     )
+    scaler = torch.cuda.amp.GradScaler(enabled=cfg.get("train", {}).get("amp", True))
     criterion = nn.CrossEntropyLoss()
 
     epochs = args.epochs if args.epochs is not None else cfg["train"].get("epochs", 20.0)
@@ -146,10 +147,13 @@ def main():
     optimizer.zero_grad(set_to_none=True)
     
     t0 = time.time()
-    for epoch in range(math.ceil(epochs)):
-        if sampler: sampler.set_epoch(epoch)
+    accum_step = 0
+    while step < total_steps:
+        cur_epoch = int(step / max(1, steps_per_epoch))
+        if sampler: sampler.set_epoch(cur_epoch)
         for batch_idx, (codes, labels) in enumerate(loader):
-            if step >= total_steps: break
+            if step >= total_steps:
+                break
             lr = cosine_lr(step, total_steps, opt_cfg["peak_lr"], opt_cfg["final_lr"], warmup_steps=100)
             for pg in optimizer.param_groups: pg["lr"] = lr
 
@@ -159,32 +163,36 @@ def main():
             inp = codes
             targets = codes
 
-            with torch.cuda.amp.autocast(dtype=torch.float16):
+            amp_enabled = cfg.get("train", {}).get("amp", True)
+            with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=torch.float16):
                 out = model(inp, labels)
                 logits = out[0] if isinstance(out, tuple) else out
                 if logits.shape[1] > inp.shape[1]:
                     logits = logits[:, :inp.shape[1], :]
-                loss = criterion(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
-                loss_scaled = loss / grad_accum
+                raw_loss = criterion(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+                loss_scaled = raw_loss / grad_accum
 
-            loss_scaled.backward()
+            scaler.scale(loss_scaled).backward()
+            accum_step += 1
 
-            if (batch_idx + 1) % grad_accum == 0 or (batch_idx + 1) == steps_per_epoch:
-                nn.utils.clip_grad_norm_(model.parameters(), cfg["train"].get("grad_clip", 1.0))
-                optimizer.step()
+            if accum_step % grad_accum == 0 or (batch_idx + 1) == steps_per_epoch:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"].get("grad_clip", 1.0))
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 step += 1
 
                 if is_main and (step % cfg.get("log_every", 50) == 0 or step == total_steps):
                     elapsed = time.time() - t0
                     vram_gb = torch.cuda.max_memory_allocated(device) / 1e9 if torch.cuda.is_available() else 0
-                    print(f"[Vanilla LlamaGen] step {step}/{total_steps} (epoch {step/steps_per_epoch:.2f}) | loss={loss.item():.4f} | lr={lr:.2e} | VRAM: {vram_gb:.2f} GB | elapsed: {elapsed:.0f}s")
+                    print(f"[Vanilla LlamaGen] step {step}/{total_steps} (epoch {step/steps_per_epoch:.2f}) | loss={raw_loss.item():.4f} | lr={lr:.2e} | VRAM: {vram_gb:.2f} GB | elapsed: {elapsed:.0f}s", flush=True)
 
                 if is_main and step > 0 and step % args.ckpt_every == 0:
                     raw_m = model.module if is_ddp else model
                     ckpt_p = os.path.join(args.out, f"ckpt_{step}.pt")
                     torch.save({"model": raw_m.state_dict(), "step": step}, ckpt_p)
-                    print(f"[Checkpoint] Saved {ckpt_p}")
+                    print(f"[Checkpoint] Saved {ckpt_p}", flush=True)
 
     if is_main:
         raw_m = model.module if is_ddp else model
