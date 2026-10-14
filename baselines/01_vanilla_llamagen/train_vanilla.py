@@ -103,14 +103,14 @@ def main():
             if is_main: print("[Vanilla LlamaGen] Enabled gradient checkpointing on model")
         elif hasattr(model, "layers"):
             import torch.utils.checkpoint as cp
-            orig_blocks = list(model.layers)
-            for idx, blk in enumerate(orig_blocks):
-                def make_ckpt_blk(b):
-                    def forward_ckpt(*b_args, **b_kwargs):
-                        return cp.checkpoint(b, *b_args, use_reentrant=False, **b_kwargs)
-                    return forward_ckpt
-                model.layers[idx] = make_ckpt_blk(blk)
-            if is_main: print(f"[Vanilla LlamaGen] Enabled gradient checkpointing on {len(orig_blocks)} transformer layers")
+            for block in model.layers:
+                orig_forward = block.forward
+                def _make_ckpt_forward(fn):
+                    def _forward(*b_args, **b_kwargs):
+                        return cp.checkpoint(fn, *b_args, use_reentrant=False, **b_kwargs)
+                    return _forward
+                block.forward = _make_ckpt_forward(orig_forward)
+            if is_main: print(f"[Vanilla LlamaGen] Enabled gradient checkpointing on {len(model.layers)} transformer layers (torch.utils.checkpoint)")
 
     if is_ddp:
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
