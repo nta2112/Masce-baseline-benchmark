@@ -164,7 +164,7 @@ def main():
                 logits = out[0] if isinstance(out, tuple) else out
                 if logits.shape[1] > inp.shape[1]:
                     logits = logits[:, :inp.shape[1], :]
-                loss = criterion(logits.view(-1, 16384), targets.view(-1))
+                loss = criterion(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
                 loss_scaled = loss / grad_accum
 
             loss_scaled.backward()
