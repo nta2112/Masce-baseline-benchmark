@@ -6,7 +6,7 @@ Directly matches the protocol in Table 3 of the MASC Paper:
 - Backbone: VAR (Visual AutoRegressive)
 - Codebook: Multi-Scale VQ-VAE with V=4096 codebook vectors in R^32
 - Reduction: V=4096 -> k=2048 coarse clusters (Table 3: "VAR + MASC (2k)")
-  or k=1024 (Table 3: "VAR + MASC (1k)")
+- L2-Normalized Distance Metric: Prevents zero-norm residual clustering collapse (chaining bug).
 """
 
 import os
@@ -104,31 +104,47 @@ def main():
     assert N == 4096, f"Expected 4096 tokens for VAR, got {N}"
     assert args.k < N, f"Target k ({args.k}) must be strictly less than fine vocabulary ({N})"
 
-    # 3. Build MASC Hierarchical Tree
+    # 3. L2 Normalization to ensure manifold-aligned distance & prevent cluster collapse
+    norms = np.linalg.norm(codebook, axis=1, keepdims=True)
+    codebook_norm = codebook / np.clip(norms, 1e-8, None)
+    print(f"[VAR-MASC] Codebook norms: min={norms.min():.4f}, max={norms.max():.4f}, mean={norms.mean():.4f}")
+    print(f"[VAR-MASC] L2 normalization applied to prevent residual zero-norm collapse!")
+
+    # 4. Build MASC Hierarchical Tree
     print(f"[VAR-MASC] Running MASC Algorithm 1 to partition {N} tokens into k={args.k} coarse clusters...")
     t0 = time.time()
-    tree = build_masc_tree(codebook, k=args.k, verbose=True)
+    tree = build_masc_tree(codebook_norm, k=args.k, verbose=True)
     elapsed = time.time() - t0
     mapping = tree.mapping
     print(f"[VAR-MASC] MASC Tree built successfully in {elapsed:.1f}s! Target k={args.k}")
 
-    # 4. Compute cluster statistics and mode representative tokens
+    # 5. Compute cluster statistics and member lookup table for Random Sampling Decode
     cluster_sizes = np.bincount(mapping, minlength=args.k)
-    print(f"[VAR-MASC] Cluster Size Distribution: Min={cluster_sizes.min()}, Max={cluster_sizes.max()}, Mean={cluster_sizes.mean():.2f}")
+    max_csize = int(cluster_sizes.max())
+    print("=" * 60)
+    print(f"[VAR-MASC] Cluster Size Distribution: Min={cluster_sizes.min()}, Max={max_csize}, Mean={cluster_sizes.mean():.2f}")
+    print(f"[VAR-MASC] Singletons: {np.sum(cluster_sizes == 1)} | Size-2: {np.sum(cluster_sizes == 2)} | Size>=3: {np.sum(cluster_sizes >= 3)}")
+    print("=" * 60)
 
-    # For each coarse cluster, find the centroid fine token (closest to mean of cluster)
+    # Coarse centroid token mode & padded member table for fast GPU random sampling
     coarse_to_fine_mode = np.zeros(args.k, dtype=np.int64)
-    for c in range(args.k):
-        member_indices = np.where(mapping == c)[0]
-        if len(member_indices) == 1:
-            coarse_to_fine_mode[c] = member_indices[0]
-        else:
-            members = codebook[member_indices]
-            center = members.mean(axis=0, keepdims=True)
-            closest_local_idx = np.argmin(np.linalg.norm(members - center, axis=1))
-            coarse_to_fine_mode[c] = member_indices[closest_local_idx]
+    cluster_members_table = np.full((args.k, max_csize), -1, dtype=np.int64)
+    coarse_embeddings = np.zeros((args.k, d), dtype=np.float32)
 
-    # 5. Save Mapping Assets
+    for c in range(args.k):
+        members = np.where(mapping == c)[0]
+        cluster_members_table[c, :len(members)] = members
+        coarse_embeddings[c] = codebook[members].mean(axis=0)
+
+        if len(members) == 1:
+            coarse_to_fine_mode[c] = members[0]
+        else:
+            members_vec = codebook[members]
+            center = members_vec.mean(axis=0, keepdims=True)
+            closest_local_idx = np.argmin(np.linalg.norm(members_vec - center, axis=1))
+            coarse_to_fine_mode[c] = members[closest_local_idx]
+
+    # 6. Save Mapping Assets
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir: os.makedirs(out_dir, exist_ok=True)
     np.savez_compressed(
@@ -137,17 +153,22 @@ def main():
         k=args.k,
         cluster_sizes=cluster_sizes,
         coarse_to_fine_mode=coarse_to_fine_mode,
+        cluster_members_table=cluster_members_table,
+        coarse_embeddings=coarse_embeddings,
         codebook_shape=np.array([N, d]),
     )
-    print(f"✅ [VAR-MASC] Saved MASC Mapping to: {args.out}")
+    print(f"[VAR-MASC] Saved MASC Mapping to: {args.out}")
 
     pt_out = args.out.replace(".npz", ".pt")
     torch.save({
         "mapping": torch.from_numpy(mapping).long(),
         "coarse_to_fine_mode": torch.from_numpy(coarse_to_fine_mode).long(),
+        "cluster_members_table": torch.from_numpy(cluster_members_table).long(),
+        "cluster_sizes": torch.from_numpy(cluster_sizes).long(),
+        "coarse_embeddings": torch.from_numpy(coarse_embeddings).float(),
         "k": args.k,
     }, pt_out)
-    print(f"✅ [VAR-MASC] Saved Torch Mapping to: {pt_out}")
+    print(f"[VAR-MASC] Saved Torch Mapping to: {pt_out}")
 
 if __name__ == "__main__":
     main()

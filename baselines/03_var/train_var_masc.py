@@ -5,10 +5,10 @@ for 20 Epochs on 10-Class ImageNet Benchmark.
 
 Directly implements Table 3 in the MASC Paper ("VAR + MASC (2k)"):
 - Multi-GPU: DistributedDataParallel (DDP) across 2x NVIDIA T4 via torchrun
-- Architecture: VAR-d16 (~310M parameters) with MASC coarse head (k=2048)
+- Architecture: VAR-d16 (~310M parameters) with balanced MASC coarse head (k=2048)
 - Target relabeling: z^b = M(z^q), reducing entropy and accelerating convergence
 - Mixed Precision: FP16 with GradScaler (prevents NaN / overflow)
-- Checkpoint: Saved to checkpoints_var_masc/ckpt_var_masc_10class_final.pt
+- Head Initialization: Centroid Weight Transfer from member fine tokens
 """
 
 import os
@@ -26,14 +26,8 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-# ---------------------------------------------------------------------------
-# Dataset Definition for Pre-extracted VAR Tokens
-# ---------------------------------------------------------------------------
+
 class VARTokenDataset(Dataset):
-    """
-    In-memory or memory-mapped dataset holding 680 multi-scale tokens per sample.
-    Shape: tokens [N, 680], labels [N]
-    """
     def __init__(self, tokens_path: str, labels_path: str = None):
         if tokens_path.endswith('.pt'):
             data = torch.load(tokens_path, map_location='cpu', weights_only=False)
@@ -59,10 +53,7 @@ class VARTokenDataset(Dataset):
         return self.tokens[idx], self.labels[idx]
 
 
-# ---------------------------------------------------------------------------
-# Cosine Annealing Learning Rate with Warmup
-# ---------------------------------------------------------------------------
-def get_lr(step: int, total_steps: int, base_lr: float, min_lr: float, warmup_steps: int = 100) -> float:
+def get_lr(step: int, total_steps: int, base_lr: float, min_lr: float, warmup_steps: int = 150) -> float:
     if step < warmup_steps:
         return base_lr * (step + 1) / max(1, warmup_steps)
     progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
@@ -70,24 +61,20 @@ def get_lr(step: int, total_steps: int, base_lr: float, min_lr: float, warmup_st
     return min_lr + 0.5 * (base_lr - min_lr) * (1.0 + math.cos(math.pi * progress))
 
 
-# ---------------------------------------------------------------------------
-# MASC Head Surgery for VAR
-# ---------------------------------------------------------------------------
 def adapt_var_for_masc(var_model: nn.Module, mapping: torch.Tensor, k: int, is_master: bool = True):
     """
-    Adapts VAR's linear classifier head from flat fine vocabulary (V=4096)
-    to coarse MASC clusters (k=2048), initializing via centroid projection.
+    Adapts VAR linear classifier head from flat fine vocabulary (V=4096)
+    to coarse MASC clusters (k=2048), initializing via Centroid Weight Transfer.
     """
     orig_head = var_model.head
     embed_dim = var_model.C
-    orig_V = orig_head.out_features  # 4096
+    orig_V = orig_head.out_features
     
     if is_master:
         print(f"[VAR-MASC Surgery] Resizing head: Linear({embed_dim}, {orig_V}) -> Linear({embed_dim}, {k})")
     
     new_head = nn.Linear(embed_dim, k, bias=orig_head.bias is not None)
     
-    # Centroid initialization from member tokens
     with torch.no_grad():
         orig_w = orig_head.weight.data.clone().cpu()
         orig_b = orig_head.bias.data.clone().cpu() if orig_head.bias is not None else None
@@ -107,12 +94,9 @@ def adapt_var_for_masc(var_model: nn.Module, mapping: torch.Tensor, k: int, is_m
     var_model.head = new_head
     var_model.V = k
     if is_master:
-        print(f"[VAR-MASC Surgery] Head successfully adapted with Centroid Pooling! New V={var_model.V}")
+        print(f"[VAR-MASC Surgery] Head successfully adapted with Centroid Weight Transfer! New V={var_model.V}")
 
 
-# ---------------------------------------------------------------------------
-# Main Training Function
-# ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune VAR + MASC for 20 epochs on 10-Class ImageNet")
     parser.add_argument("--var-repo", type=str, default="VAR", help="Path to VAR repository")
@@ -130,9 +114,9 @@ def main():
     parser.add_argument("--epochs", type=float, default=20.0, help="Number of epochs (default 20.0)")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size per GPU (default 8)")
     parser.add_argument("--grad-accum", type=int, default=2, help="Gradient accumulation steps")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Peak learning rate")
+    parser.add_argument("--lr", type=float, default=5e-5, help="Peak learning rate (default: 5e-5 for stable fine-tuning)")
     parser.add_argument("--min-lr", type=float, default=1e-6, help="Minimum learning rate")
-    parser.add_argument("--warmup-steps", type=int, default=100, help="Warmup steps")
+    parser.add_argument("--warmup-steps", type=int, default=150, help="Warmup steps")
     parser.add_argument("--weight-decay", type=float, default=0.05, help="Weight decay")
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--fp16", action="store_true", default=True, help="Enable FP16 mixed precision")
@@ -165,6 +149,7 @@ def main():
         print(f"  World Size: {world_size} GPU(s) | Local Rank: {local_rank}")
         print(f"  Depth: d{args.depth} | Coarse Vocab k: {args.k} (from V=4096)")
         print(f"  Local Batch: {args.batch_size} | Accum: {args.grad_accum} | Global Batch: {args.batch_size * world_size * args.grad_accum}")
+        print(f"  Peak LR: {args.lr:.2e} | Min LR: {args.min_lr:.2e} | Warmup: {args.warmup_steps}")
         print("=" * 70)
 
     # 1. Load MASC Mapping
@@ -198,7 +183,6 @@ def main():
         shared_aln=False,
     )
 
-    # Load pretrained weights
     vae_state = torch.load(args.vae_ckpt, map_location="cpu", weights_only=False)
     vae.load_state_dict(vae_state.get("model", vae_state), strict=True)
     vae.eval()
@@ -273,8 +257,7 @@ def main():
             label_B = label_B.to(device, non_blocking=True)
             B = label_B.shape[0]
 
-            # Relabel fine tokens to MASC coarse clusters
-            # z^b = M(z^q)
+            # Relabel fine tokens to MASC coarse clusters: z^b = M(z^q)
             gt_coarse_BL = mapping_gpu[gt_BL]
 
             # Prepare teacher forcing input features: x_BLCv_wo_first_l
@@ -328,11 +311,12 @@ def main():
             'mapping': mapping_t,
         }, final_ckpt)
         print("=" * 70)
-        print(f"✅ VAR + MASC 20-Epoch Training Complete! Checkpoint: {final_ckpt}")
+        print(f"[VAR-MASC] Training completed! Final Checkpoint saved to: {final_ckpt}")
         print("=" * 70)
 
     if is_dist:
         torch.distributed.destroy_process_group()
+
 
 if __name__ == "__main__":
     main()

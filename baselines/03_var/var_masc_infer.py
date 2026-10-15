@@ -1,39 +1,44 @@
 #!/usr/bin/env python3
 """
-VAR + MASC Image Sampling and Generation Engine.
-
-Directly implements Section 3.3 ("Integrating the MASC Prior") for Next-Scale Autoregressive generation:
-1. Samples coarse tokens z^b from predicted k-way logits at each scale pyramid level.
-2. Decodes coarse tokens z^b -> fine tokens z^q using MASC mode representative lookup (Table 10).
-3. Looks up continuous codebook vectors in Multi-Scale VQ-VAE.
-4. Generates high-fidelity 256x256 images.
-5. Supports multi-GPU parallel generation across 2x T4 GPUs.
+Autoregressive Sampling & Evaluation for VAR + MASC (Visual AutoRegressive with MASC).
+Supports:
+  - Random Sampling Decode (MASC Paper Section 3.3 Default - preserves texture variety)
+  - Centroid Token Mode Decode
+  - Continuous Centroid Embedding Mode Decode
+  - Multi-GPU parallel sampling (balanced across target 10 classes)
 """
 
 import os
 import sys
 import time
 import argparse
+from typing import Optional, List
+
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from tqdm import tqdm
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Sample images from fine-tuned VAR + MASC")
+    parser = argparse.ArgumentParser(description="Autoregressive Sampling for VAR + MASC")
     parser.add_argument("--var-repo", type=str, default="VAR", help="Path to VAR repository")
     parser.add_argument("--vae-ckpt", type=str, required=True, help="Path to vae_ch160v4096z32.pth")
-    parser.add_argument("--ckpt", type=str, required=True, help="Path to ckpt_var_masc_10class_final.pt")
-    parser.add_argument("--mapping-path", type=str, required=True, help="Path to var_masc_mapping_k2048.npz or .pt")
-    parser.add_argument("--depth", type=int, default=16, help="VAR depth")
-    parser.add_argument("--k", type=int, default=2048, help="Coarse vocabulary size")
+    parser.add_argument("--ckpt", type=str, required=True, help="Path to fine-tuned ckpt_var_masc.pt")
+    parser.add_argument("--mapping-path", type=str, required=True, help="Path to var_masc_mapping_k2048.pt or .npz")
+    parser.add_argument("--depth", type=int, default=16, help="VAR depth (default: 16)")
+    parser.add_argument("--k", type=int, default=2048, help="Target coarse vocabulary size (default: 2048)")
     
-    parser.add_argument("--num-samples", type=int, default=1000, help="Number of samples to generate")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size per GPU")
-    parser.add_argument("--cfg", type=float, default=4.0, help="Classifier-free guidance scale")
-    parser.add_argument("--top-k", type=int, default=900, help="Top-k sampling")
-    parser.add_argument("--top-p", type=float, default=0.96, help="Top-p sampling")
-    parser.add_argument("--out", type=str, default="samples_var_masc_finetuned_1000.npz", help="Output .npz path")
+    parser.add_argument("--num-samples", type=int, default=1000, help="Number of samples to generate (default: 1000)")
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size per GPU (default: 16)")
+    parser.add_argument("--cfg", type=float, default=2.0, help="Classifier-Free Guidance ratio (default: 2.0)")
+    parser.add_argument("--top-k", type=int, default=900, help="Top-K sampling (default: 900)")
+    parser.add_argument("--top-p", type=float, default=0.96, help="Top-P nucleus sampling (default: 0.96)")
+    parser.add_argument("--decode-mode", type=str, default="random", choices=["random", "mode", "centroid_emb"],
+                        help="Coarse-to-fine decode mode (default: random matching paper)")
+    
+    parser.add_argument("--out", type=str, default="samples_var_masc_1000.npz", help="Output path (.npz)")
     return parser.parse_args()
 
 
@@ -44,12 +49,16 @@ def parse_args():
 def autoregressive_infer_cfg_masc(
     var_model: nn.Module,
     vae: nn.Module,
-    coarse_to_fine_gpu: torch.Tensor,
+    c2f_mode_gpu: torch.Tensor,
+    c_members_gpu: Optional[torch.Tensor],
+    c_sizes_gpu: Optional[torch.Tensor],
+    coarse_emb_gpu: Optional[torch.Tensor],
     B: int,
     label_B: torch.LongTensor,
-    cfg: float = 4.0,
+    cfg: float = 2.0,
     top_k: int = 900,
     top_p: float = 0.96,
+    decode_mode: str = "random",
     rng: torch.Generator = None,
 ) -> torch.Tensor:
     """
@@ -85,16 +94,28 @@ def autoregressive_infer_cfg_masc(
         t = cfg * ratio
         logits_Blk = (1.0 + t) * logits_Blk[:B] - t * logits_Blk[B:]
         
-        # 3. Sample coarse tokens z^b
+        # 3. Sample coarse tokens z^b in [0, k-1]
         coarse_Bl = sample_with_top_k_top_p_(logits_Blk, rng=rng, top_k=top_k, top_p=top_p, num_samples=1)[:, :, 0]
         
-        # 4. MASC Decoding: coarse token z^b -> fine token z^q via representative lookup
-        fine_idx_Bl = coarse_to_fine_gpu[coarse_Bl]
-        
-        # 5. Look up continuous codebook embedding for fine tokens
-        h_BChw = var_model.vae_quant_proxy[0].embedding(fine_idx_Bl)
+        # 4. MASC Decoding: coarse token z^b -> fine token representation
+        if decode_mode == "random" and c_members_gpu is not None and c_sizes_gpu is not None:
+            # Paper Section 3.3 Default: Uniform random sample from cluster members
+            sizes = c_sizes_gpu[coarse_Bl]
+            rand_floats = torch.rand(coarse_Bl.shape, device=device)
+            rand_slot = (rand_floats * sizes).long()
+            fine_idx_Bl = torch.gather(c_members_gpu[coarse_Bl], dim=2, index=rand_slot.unsqueeze(-1)).squeeze(-1)
+            h_BChw = var_model.vae_quant_proxy[0].embedding(fine_idx_Bl)
+        elif decode_mode == "centroid_emb" and coarse_emb_gpu is not None:
+            # Continuous centroid vector embedding
+            h_BChw = F.embedding(coarse_Bl, coarse_emb_gpu)
+        else:
+            # Centroid mode token
+            fine_idx_Bl = c2f_mode_gpu[coarse_Bl]
+            h_BChw = var_model.vae_quant_proxy[0].embedding(fine_idx_Bl)
+            
         h_BChw = h_BChw.transpose_(1, 2).reshape(B, var_model.Cvae, pn, pn)
         
+        # 5. Multi-scale residual accumulation
         f_hat, next_token_map = var_model.vae_quant_proxy[0].get_next_autoregressive_input(si, len(var_model.patch_nums), f_hat, h_BChw)
         if si != var_model.num_stages_minus_1:
             next_token_map = next_token_map.view(B, var_model.Cvae, -1).transpose(1, 2)
@@ -151,14 +172,27 @@ def sample_worker(
     var_model.load_state_dict(clean_st, strict=True)
     var_model.eval()
 
-    # 3. Load MASC Representative mapping
+    # 3. Load MASC Mapping Assets
+    c_members_gpu = None
+    c_sizes_gpu = None
+    coarse_emb_gpu = None
+
     if args.mapping_path.endswith(".pt"):
         map_data = torch.load(args.mapping_path, map_location="cpu", weights_only=False)
-        c2f = map_data["coarse_to_fine_mode"]
+        c2f_mode = map_data["coarse_to_fine_mode"].long().to(dev)
+        if "cluster_members_table" in map_data:
+            c_members_gpu = map_data["cluster_members_table"].long().to(dev)
+            c_sizes_gpu = map_data["cluster_sizes"].long().to(dev)
+        if "coarse_embeddings" in map_data:
+            coarse_emb_gpu = map_data["coarse_embeddings"].float().to(dev)
     else:
-        map_data = np.load(args.mapping_path)
-        c2f = torch.from_numpy(map_data["coarse_to_fine_mode"]).long()
-    c2f_gpu = c2f.to(dev)
+        map_np = np.load(args.mapping_path)
+        c2f_mode = torch.from_numpy(map_np["coarse_to_fine_mode"]).long().to(dev)
+        if "cluster_members_table" in map_np:
+            c_members_gpu = torch.from_numpy(map_np["cluster_members_table"]).long().to(dev)
+            c_sizes_gpu = torch.from_numpy(map_np["cluster_sizes"]).long().to(dev)
+        if "coarse_embeddings" in map_np:
+            coarse_emb_gpu = torch.from_numpy(map_np["coarse_embeddings"]).float().to(dev)
 
     # 4. Sampling Loop
     num_batches = (len(sub_classes) + batch_size - 1) // batch_size
@@ -173,12 +207,16 @@ def sample_worker(
                 imgs = autoregressive_infer_cfg_masc(
                     var_model=var_model,
                     vae=vae,
-                    coarse_to_fine_gpu=c2f_gpu,
+                    c2f_mode_gpu=c2f_mode,
+                    c_members_gpu=c_members_gpu,
+                    c_sizes_gpu=c_sizes_gpu,
+                    coarse_emb_gpu=coarse_emb_gpu,
                     B=len(cur_labels),
                     label_B=label_B,
                     cfg=args.cfg,
                     top_k=args.top_k,
                     top_p=args.top_p,
+                    decode_mode=args.decode_mode,
                 )
                 
             # Denormalize [0, 1] to uint8 [0, 255]
@@ -191,10 +229,14 @@ def sample_worker(
 def main():
     args = parse_args()
     n_gpus = torch.cuda.device_count()
+    print("=" * 70)
     print(f"[VAR+MASC Sampling] Available GPUs: {n_gpus}")
-    print(f"[VAR+MASC Sampling] Target samples: {args.num_samples} (10 classes balanced)")
+    print(f"[VAR+MASC Sampling] Target samples: {args.num_samples} (Balanced 10 classes: 0..9)")
+    print(f"[VAR+MASC Sampling] Sampling Params: CFG={args.cfg}, Top-K={args.top_k}, Top-P={args.top_p}")
+    print(f"[VAR+MASC Sampling] Decode Mode: {args.decode_mode}")
+    print("=" * 70)
 
-    # 100 images per class for classes 0..9 (identical to reference batch)
+    # Exactly 100 images per class for classes 0..9 (identical to reference batch)
     classes = np.repeat(np.arange(10), args.num_samples // 10)
     
     t0 = time.time()
@@ -215,13 +257,13 @@ def main():
 
     total_time = time.time() - t0
     throughput = args.num_samples / total_time
-    print(f"✅ [VAR+MASC Sampling] Generated {len(final_images)} images in {total_time:.1f}s ({throughput:.1f} img/s)!")
+    print(f"\n[VAR+MASC Sampling] Generated {len(final_images)} images in {total_time:.1f}s ({throughput:.1f} img/s)!")
 
-    # Save to npz
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir: os.makedirs(out_dir, exist_ok=True)
     np.savez_compressed(args.out, arr_0=final_images)
-    print(f"✅ Saved generated samples to: {args.out} ({os.path.getsize(args.out)/1e6:.1f} MB)")
+    print(f"[VAR+MASC Sampling] Saved to: {args.out} ({os.path.getsize(args.out)/1e6:.1f} MB)")
+
 
 if __name__ == "__main__":
     main()
