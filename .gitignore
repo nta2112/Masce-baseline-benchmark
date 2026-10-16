@@ -20,3 +20,6 @@ VAR/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+baselines/04_randar/RandAR/
+*.safetensors
