@@ -18,7 +18,8 @@ def main():
     parser.add_argument("--k", type=int, default=4096)
     parser.add_argument("--num-samples", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--cfg", type=float, default=3.0)
+    parser.add_argument("--cfg", type=float, default=None)
+    parser.add_argument("--cfg-scales", type=str, default="1.0,4.0")
     parser.add_argument("--top-k", type=int, default=1000)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--steps", type=int, default=88)
@@ -43,10 +44,12 @@ def main():
     map_data = torch.load(args.mapping_path, map_location="cpu")
     c2f_mode = map_data["coarse_to_fine_mode"].long().to(device)
 
-    # 3. Load Model with Adapted Head
+    # 3. Load Model with Adapted Head & Token Embeddings
     model = instantiate_from_config(config.ar_model)
     dim = model.output.in_features
+    embed_dim = model.tok_embeddings.embedding_dim
     model.output = nn.Linear(dim, args.k, bias=False)
+    model.tok_embeddings = nn.Embedding(args.k, embed_dim)
     model.vocab_size = args.k
 
     st = torch.load(args.ckpt, map_location="cpu")
@@ -59,6 +62,10 @@ def main():
     classes = np.repeat(np.arange(10), args.num_samples // 10)
     all_imgs = []
     t0 = time.time()
+    if args.cfg is not None:
+        cfg_scales = [1.0, float(args.cfg)]
+    else:
+        cfg_scales = [float(c) for c in args.cfg_scales.split(",")]
 
     with torch.no_grad():
         for i in tqdm(range(0, len(classes), args.batch_size), desc="RandAR+MASC Sampling"):
@@ -68,7 +75,7 @@ def main():
                 coarse_indices = model.generate(
                     cond=cond,
                     token_order=None,
-                    cfg_scales=[args.cfg, args.cfg],
+                    cfg_scales=cfg_scales,
                     num_inference_steps=args.steps,
                     temperature=1.0,
                     top_k=args.top_k,

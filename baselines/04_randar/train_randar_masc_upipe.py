@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fine-tuning RandAR + MASC + UPipe on 10-Class ImageNet.
-Coarse Vocabulary k=4,096, Centroid Weight Transfer, Uncertainty Regularization.
+Coarse Vocabulary k=4,096, Centroid Weight Transfer for BOTH Head and Embeddings, Uncertainty Regularization.
 """
 import os, sys, time, argparse, glob
 import numpy as np
@@ -23,19 +23,31 @@ class RandARTokenDataset(Dataset):
         return torch.from_numpy(self.codes[idx]).long(), torch.tensor(self.labels[idx]).long()
 
 def adapt_randar_for_masc(model, mapping, k=4096):
+    # 1. Output classification head
     orig_output = model.output
     dim = orig_output.in_features
     new_output = nn.Linear(dim, k, bias=False)
     orig_w = orig_output.weight.data.clone().cpu()
+    
+    # 2. Token embedding table
+    orig_tok = model.tok_embeddings
+    embed_dim = orig_tok.embedding_dim
+    new_tok = nn.Embedding(k, embed_dim)
+    orig_tok_w = orig_tok.weight.data.clone().cpu()
+
     for c in range(k):
         members = torch.where(mapping == c)[0]
         if len(members) > 0:
             new_output.weight.data[c] = orig_w[members].mean(dim=0)
+            new_tok.weight.data[c] = orig_tok_w[members].mean(dim=0)
         else:
             new_output.weight.data[c].zero_()
+            new_tok.weight.data[c].zero_()
+
     model.output = new_output
+    model.tok_embeddings = new_tok
     model.vocab_size = k
-    print(f"[RandAR+MASC] Classifier head adapted via Centroid Weight Transfer: Linear({dim}, {k})")
+    print(f"[RandAR+MASC] Adapted both output Linear({dim}, {k}) and tok_embeddings Embedding({k}, {embed_dim}) via Centroid Weight Transfer.")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -118,14 +130,15 @@ def main():
         for tokens, labels in loader:
             if global_step >= total_steps: break
             tokens, labels = tokens.to(device, non_blocking=True), labels.to(device, non_blocking=True)
-            # Map fine tokens to coarse tokens
+            # Map fine tokens to coarse tokens (shape B, 256, in range [0..k-1])
             coarse_tokens = mapping_gpu[tokens]
 
             lr = args.min_lr + 0.5 * (args.lr - args.min_lr) * (1.0 + np.cos(np.pi * global_step / total_steps))
             for pg in optimizer.param_groups: pg["lr"] = lr
 
             with torch.cuda.amp.autocast(dtype=torch.float16):
-                logits, loss, _ = model(tokens, labels, targets=coarse_tokens)
+                # Both input and targets are coarse tokens!
+                logits, loss, _ = model(coarse_tokens, labels, targets=coarse_tokens)
                 # UPipe Uncertainty regularization (entropy penalty on coarse prediction)
                 if args.upipe_entropy > 0:
                     probs = F.softmax(logits, dim=-1)

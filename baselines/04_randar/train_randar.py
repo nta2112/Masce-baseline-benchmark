@@ -39,8 +39,8 @@ def main():
     parser.add_argument("--log-every", type=int, default=50)
     args = parser.parse_args()
 
-    if args.randar-repo not in sys.path:
-        sys.path.insert(0, args.randar-repo)
+    if args.randar_repo not in sys.path:
+        sys.path.insert(0, args.randar_repo)
     from RandAR.util import instantiate_from_config, load_safetensors
 
     is_dist = "RANK" in os.environ and "WORLD_SIZE" in os.environ
@@ -56,7 +56,7 @@ def main():
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     is_master = (rank == 0)
 
-    cfg_path = os.path.join(args.randar-repo, "configs/randar/randar_l_0.3b_llamagen.yaml")
+    cfg_path = os.path.join(args.randar_repo, "configs/randar/randar_l_0.3b_llamagen.yaml")
     config = OmegaConf.load(cfg_path)
     model = instantiate_from_config(config.ar_model).to(device)
 

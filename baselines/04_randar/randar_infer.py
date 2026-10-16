@@ -15,7 +15,8 @@ def main():
     parser.add_argument("--ckpt", type=str, required=True)
     parser.add_argument("--num-samples", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--cfg", type=float, default=3.0)
+    parser.add_argument("--cfg", type=float, default=None)
+    parser.add_argument("--cfg-scales", type=str, default="1.0,4.0")
     parser.add_argument("--top-k", type=int, default=1000)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--steps", type=int, default=88)
@@ -49,6 +50,10 @@ def main():
     classes = np.repeat(np.arange(10), args.num_samples // 10)
     all_imgs = []
     t0 = time.time()
+    if args.cfg is not None:
+        cfg_scales = [1.0, float(args.cfg)]
+    else:
+        cfg_scales = [float(c) for c in args.cfg_scales.split(",")]
 
     with torch.no_grad():
         for i in tqdm(range(0, len(classes), args.batch_size), desc="RandAR Sampling"):
@@ -58,7 +63,7 @@ def main():
                 indices = model.generate(
                     cond=cond,
                     token_order=None,
-                    cfg_scales=[args.cfg, args.cfg],
+                    cfg_scales=cfg_scales,
                     num_inference_steps=args.steps,
                     temperature=1.0,
                     top_k=args.top_k,
