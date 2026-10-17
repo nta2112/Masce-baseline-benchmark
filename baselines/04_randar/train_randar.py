@@ -71,7 +71,7 @@ def main():
         print(f"[RandAR Baseline] Loaded pretrained weights from {args.pretrained}")
 
     if is_dist:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
 
     dataset = RandARTokenDataset(args.codes_dir)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True) if is_dist else None
@@ -98,6 +98,8 @@ def main():
 
             # Pure float32 forward pass to completely avoid fp16 underflow/overflow (NaN)
             logits, loss, _ = model(tokens, labels, targets=tokens)
+            if torch.isnan(loss) or torch.isinf(loss):
+                raise ValueError(f"[FATAL] Loss became {loss.item()} at step {global_step}! Aborting.")
             loss_scaled = loss / args.grad_accum
             loss_scaled.backward()
 

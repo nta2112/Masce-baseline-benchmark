@@ -106,7 +106,7 @@ def main():
     model = model.to(device)
 
     if is_dist:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
 
     dataset = RandARTokenDataset(args.codes_dir)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True) if is_dist else None
@@ -135,6 +135,8 @@ def main():
 
             # Pure float32 forward pass to completely eliminate NaN
             logits, loss, _ = model(coarse_tokens, labels, targets=coarse_tokens)
+            if torch.isnan(loss) or torch.isinf(loss):
+                raise ValueError(f"[FATAL] Loss became {loss.item()} at step {global_step}! Aborting.")
             if args.upipe_entropy > 0:
                 probs = F.softmax(logits, dim=-1)
                 entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=-1).mean()
