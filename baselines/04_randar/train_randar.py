@@ -79,12 +79,11 @@ def main():
                         num_workers=2, pin_memory=True, drop_last=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.05)
-    scaler = torch.cuda.amp.GradScaler(enabled=True)
 
     steps_per_epoch = len(loader)
     total_steps = int(args.epochs * steps_per_epoch)
     if is_master:
-        print(f"[RandAR Baseline] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps}")
+        print(f"[RandAR Baseline] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps} (Pure Float32 Training)")
 
     global_step = 0
     t0 = time.time()
@@ -97,16 +96,14 @@ def main():
             lr = args.min_lr + 0.5 * (args.lr - args.min_lr) * (1.0 + np.cos(np.pi * global_step / total_steps))
             for pg in optimizer.param_groups: pg["lr"] = lr
 
-            with torch.cuda.amp.autocast(dtype=torch.float16):
-                logits, loss, _ = model(tokens, labels, targets=tokens)
-                loss_scaled = loss / args.grad_accum
+            # Pure float32 forward pass to completely avoid fp16 underflow/overflow (NaN)
+            logits, loss, _ = model(tokens, labels, targets=tokens)
+            loss_scaled = loss / args.grad_accum
+            loss_scaled.backward()
 
-            scaler.scale(loss_scaled).backward()
             if (global_step + 1) % args.grad_accum == 0:
-                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 

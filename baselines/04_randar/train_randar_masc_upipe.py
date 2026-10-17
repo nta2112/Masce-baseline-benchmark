@@ -2,6 +2,7 @@
 """
 Fine-tuning RandAR + MASC + UPipe on 10-Class ImageNet.
 Coarse Vocabulary k=4,096, Centroid Weight Transfer for BOTH Head and Embeddings, Uncertainty Regularization.
+Pure Float32 training to eliminate NaN gradients.
 """
 import os, sys, time, argparse, glob
 import numpy as np
@@ -23,13 +24,11 @@ class RandARTokenDataset(Dataset):
         return torch.from_numpy(self.codes[idx]).long(), torch.tensor(self.labels[idx]).long()
 
 def adapt_randar_for_masc(model, mapping, k=4096):
-    # 1. Output classification head
     orig_output = model.output
     dim = orig_output.in_features
     new_output = nn.Linear(dim, k, bias=False)
     orig_w = orig_output.weight.data.clone().cpu()
     
-    # 2. Token embedding table
     orig_tok = model.tok_embeddings
     embed_dim = orig_tok.embedding_dim
     new_tok = nn.Embedding(k, embed_dim)
@@ -115,12 +114,11 @@ def main():
                         num_workers=2, pin_memory=True, drop_last=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.05)
-    scaler = torch.cuda.amp.GradScaler(enabled=True)
 
     steps_per_epoch = len(loader)
     total_steps = int(args.epochs * steps_per_epoch)
     if is_master:
-        print(f"[RandAR+MASC+UPipe] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps}")
+        print(f"[RandAR+MASC+UPipe] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps} (Pure Float32 Training)")
 
     global_step = 0
     t0 = time.time()
@@ -130,28 +128,23 @@ def main():
         for tokens, labels in loader:
             if global_step >= total_steps: break
             tokens, labels = tokens.to(device, non_blocking=True), labels.to(device, non_blocking=True)
-            # Map fine tokens to coarse tokens (shape B, 256, in range [0..k-1])
             coarse_tokens = mapping_gpu[tokens]
 
             lr = args.min_lr + 0.5 * (args.lr - args.min_lr) * (1.0 + np.cos(np.pi * global_step / total_steps))
             for pg in optimizer.param_groups: pg["lr"] = lr
 
-            with torch.cuda.amp.autocast(dtype=torch.float16):
-                # Both input and targets are coarse tokens!
-                logits, loss, _ = model(coarse_tokens, labels, targets=coarse_tokens)
-                # UPipe Uncertainty regularization (entropy penalty on coarse prediction)
-                if args.upipe_entropy > 0:
-                    probs = F.softmax(logits, dim=-1)
-                    entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=-1).mean()
-                    loss = loss + args.upipe_entropy * entropy
-                loss_scaled = loss / args.grad_accum
+            # Pure float32 forward pass to completely eliminate NaN
+            logits, loss, _ = model(coarse_tokens, labels, targets=coarse_tokens)
+            if args.upipe_entropy > 0:
+                probs = F.softmax(logits, dim=-1)
+                entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=-1).mean()
+                loss = loss + args.upipe_entropy * entropy
+            loss_scaled = loss / args.grad_accum
+            loss_scaled.backward()
 
-            scaler.scale(loss_scaled).backward()
             if (global_step + 1) % args.grad_accum == 0:
-                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 

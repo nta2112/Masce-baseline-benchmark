@@ -18,7 +18,6 @@ def main():
 
     st = torch.load(args.vq_ckpt, map_location="cpu")
     w = st.get("model", st)
-    # Extract codebook embedding
     for key in ["quantize.embedding.weight", "embedding.weight"]:
         if key in w:
             codebook = w[key].float().numpy()
@@ -27,14 +26,12 @@ def main():
         raise KeyError("Could not find codebook embedding weight in VQ checkpoint!")
 
     print(f"[MASC Build] Extracted Codebook shape: {codebook.shape} (N={len(codebook)})")
-    # L2-normalize codebook
     norms = np.linalg.norm(codebook, axis=1, keepdims=True)
     codebook_norm = codebook / np.maximum(norms, 1e-8)
 
     print(f"[MASC Build] Running MASC clustering to k={args.k}...")
     mapping, _ = build_masc_tree_scipy(codebook_norm, k=args.k)
 
-    # Compute mode token for each cluster
     mode = np.zeros(args.k, dtype=np.int64)
     for c in range(args.k):
         members = np.where(mapping == c)[0]

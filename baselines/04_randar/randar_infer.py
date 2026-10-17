@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Multi-GPU sampling for RandAR Baseline (10-Class Balanced 1,000 images).
+Pure Float32 inference to ensure 100% dtype match in KV Cache.
 """
 import os, sys, argparse, time
 import numpy as np
@@ -36,15 +37,17 @@ def main():
     vq_st = torch.load(args.vq_ckpt, map_location="cpu")
     tokenizer.load_state_dict(vq_st.get("model", vq_st))
 
-    # 2. Load Model
-    model = instantiate_from_config(config.ar_model).to(device).eval()
+    # 2. Load Model in Float32 to match KV Cache precisely
+    precision = torch.float32
+    model = instantiate_from_config(config.ar_model).to(device=device, dtype=precision)
     if args.ckpt.endswith(".safetensors"):
         w = load_safetensors(args.ckpt)
     else:
         st = torch.load(args.ckpt, map_location="cpu")
         w = st.get("model", st)
     model.load_state_dict(w, strict=False)
-    print(f"[RandAR Inference] Loaded model from: {args.ckpt}")
+    model.eval()
+    print(f"[RandAR Inference] Loaded model from: {args.ckpt} (Float32)")
 
     # 3. Generate 1,000 balanced images (100 per class for classes 0..9)
     classes = np.repeat(np.arange(10), args.num_samples // 10)
@@ -59,17 +62,16 @@ def main():
         for i in tqdm(range(0, len(classes), args.batch_size), desc="RandAR Sampling"):
             b_cls = classes[i : min(i + args.batch_size, len(classes))]
             cond = torch.tensor(b_cls, device=device, dtype=torch.long)
-            with torch.cuda.amp.autocast(dtype=torch.float16):
-                indices = model.generate(
-                    cond=cond,
-                    token_order=None,
-                    cfg_scales=cfg_scales,
-                    num_inference_steps=args.steps,
-                    temperature=1.0,
-                    top_k=args.top_k,
-                    top_p=args.top_p,
-                )
-                imgs = tokenizer.decode_codes_to_img(indices, 256)
+            indices = model.generate(
+                cond=cond,
+                token_order=None,
+                cfg_scales=cfg_scales,
+                num_inference_steps=args.steps,
+                temperature=1.0,
+                top_k=args.top_k,
+                top_p=args.top_p,
+            )
+            imgs = tokenizer.decode_codes_to_img(indices, 256)
             all_imgs.append(imgs)
 
     all_imgs = np.concatenate(all_imgs, axis=0)
