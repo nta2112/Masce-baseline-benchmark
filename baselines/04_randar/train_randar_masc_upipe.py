@@ -114,7 +114,7 @@ def main():
     # 3. Build Model & Disable grad_checkpointing (batch_size=16 easily fits in 6-7 GB VRAM)
     cfg_path = os.path.join(args.randar_repo, "configs/randar/randar_l_0.3b_llamagen.yaml")
     config = OmegaConf.load(cfg_path)
-    config.ar_model.params.grad_checkpointing = False
+    config.ar_model.params.grad_checkpointing = True
     model = instantiate_from_config(config.ar_model).to(device)
 
     # 4. Load Pretrained Weights & Adapt for MASC
