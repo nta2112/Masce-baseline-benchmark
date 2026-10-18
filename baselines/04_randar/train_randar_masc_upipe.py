@@ -41,31 +41,33 @@ def adapt_randar_for_masc(model, mapping, k=4096):
     Adapts output Linear(1024, 16384) -> Linear(1024, k)
     and tok_embeddings Embedding(16384, 1024) -> Embedding(k, 1024)
     by averaging the pretrained weights of all fine tokens belonging to each coarse cluster.
+    Vectorized and device-safe (runs directly on model GPU, 0 device mismatch).
     """
     old_output = model.output
-    dim = old_output.in_features
-    new_output = nn.Linear(dim, k, bias=False)
-
     old_emb = model.tok_embeddings
-    new_emb = nn.Embedding(k, dim)
+    dim = old_output.in_features
+    device = old_output.weight.device
 
-    cluster_counts = torch.zeros(k, dtype=torch.float32)
-    new_output_w = torch.zeros(k, dim, dtype=torch.float32)
-    new_emb_w = torch.zeros(k, dim, dtype=torch.float32)
+    mapping = mapping.to(device).long()
 
     with torch.no_grad():
-        for fine_id in range(len(mapping)):
-            c_id = mapping[fine_id].item()
-            new_output_w[c_id] += old_output.weight[fine_id]
-            new_emb_w[c_id] += old_emb.weight[fine_id]
-            cluster_counts[c_id] += 1.0
+        new_output_w = torch.zeros(k, dim, dtype=torch.float32, device=device)
+        new_emb_w = torch.zeros(k, dim, dtype=torch.float32, device=device)
+        counts = torch.zeros(k, dtype=torch.float32, device=device)
 
-        valid = cluster_counts > 0
-        new_output_w[valid] /= cluster_counts[valid].unsqueeze(1)
-        new_emb_w[valid] /= cluster_counts[valid].unsqueeze(1)
+        new_output_w.index_add_(0, mapping, old_output.weight.data.float())
+        new_emb_w.index_add_(0, mapping, old_emb.weight.data.float())
+        counts.index_add_(0, mapping, torch.ones_like(mapping, dtype=torch.float32, device=device))
 
-        new_output.weight.copy_(new_output_w)
-        new_emb.weight.copy_(new_emb_w)
+        valid = counts > 0
+        new_output_w[valid] /= counts[valid].unsqueeze(1)
+        new_emb_w[valid] /= counts[valid].unsqueeze(1)
+
+        new_output = nn.Linear(dim, k, bias=False, device=device)
+        new_emb = nn.Embedding(k, dim, device=device)
+
+        new_output.weight.data.copy_(new_output_w)
+        new_emb.weight.data.copy_(new_emb_w)
 
     model.output = new_output
     model.tok_embeddings = new_emb
