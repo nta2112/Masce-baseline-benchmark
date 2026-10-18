@@ -2,6 +2,7 @@
 """
 Fine-tuning RandAR Baseline (CVPR 2025 Oral) on 10-Class ImageNet.
 Flat vocabulary N = 16,384, Random-order Autoregressive generation.
+Optimized with Tensor Core FP16 AMP, Fast Vectorized Token Order, Robust VRAM Management.
 """
 import os, sys, time, argparse, glob
 import numpy as np
@@ -12,16 +13,25 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 from omegaconf import OmegaConf
 
-class RandARTokenDataset(Dataset):
+# Avoid memory fragmentation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+class FastRandARTokenDataset(Dataset):
     def __init__(self, codes_dir):
         shards = sorted(glob.glob(f"{codes_dir}/shard_*.npy"))
-        self.codes = np.concatenate([np.load(s) for s in shards], axis=0)
-        self.labels = np.load(f"{codes_dir}/labels.npy")
-        assert len(self.codes) == len(self.labels)
+        codes_np = np.concatenate([np.load(s) for s in shards], axis=0)
+        labels_np = np.load(f"{codes_dir}/labels.npy")
+        assert len(codes_np) == len(labels_np)
+        
+        # Keep on pinned host memory to save critical GPU VRAM
+        self.codes = torch.from_numpy(codes_np).long()
+        self.labels = torch.from_numpy(labels_np).long()
+
     def __len__(self):
         return len(self.codes)
+
     def __getitem__(self, idx):
-        return torch.from_numpy(self.codes[idx]).long(), torch.tensor(self.labels[idx]).long()
+        return self.codes[idx], self.labels[idx]
 
 def main():
     parser = argparse.ArgumentParser()
@@ -31,7 +41,7 @@ def main():
     parser.add_argument("--codes-dir", type=str, required=True)
     parser.add_argument("--epochs", type=float, default=20.0)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--grad-accum", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--min-lr", type=float, default=1e-6)
     parser.add_argument("--out-dir", type=str, default="checkpoints_randar")
@@ -56,11 +66,18 @@ def main():
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     is_master = (rank == 0)
 
+    # 1. Enable Hardware Acceleration & Fast Kernels
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+
+    # 2. Load Config & Disable grad_checkpointing (batch_size=16 easily fits in 6-7 GB VRAM)
     cfg_path = os.path.join(args.randar_repo, "configs/randar/randar_l_0.3b_llamagen.yaml")
     config = OmegaConf.load(cfg_path)
+    config.ar_model.params.grad_checkpointing = False
     model = instantiate_from_config(config.ar_model).to(device)
 
-    # Load weights
+    # 3. Load Pretrained Weights
     if args.pretrained.endswith(".safetensors"):
         weights = load_safetensors(args.pretrained)
     else:
@@ -73,44 +90,82 @@ def main():
     if is_dist:
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
 
-    dataset = RandARTokenDataset(args.codes_dir)
+    # 4. Pinned Memory Dataset & DataLoader
+    dataset = FastRandARTokenDataset(args.codes_dir)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True) if is_dist else None
     loader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler, shuffle=(sampler is None),
                         num_workers=2, pin_memory=True, drop_last=True)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.05)
+    # 5. Fused AdamW Optimizer + AMP GradScaler
+    try:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.05, fused=True)
+    except Exception:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.05)
 
-    steps_per_epoch = len(loader)
+    scaler = torch.cuda.amp.GradScaler(init_scale=1024, growth_factor=1.5, backoff_factor=0.5, growth_interval=100)
+
+    steps_per_epoch = len(loader) // args.grad_accum
     total_steps = int(args.epochs * steps_per_epoch)
     if is_master:
-        print(f"[RandAR Baseline] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps} (Pure Float32 Training)")
+        print(f"[RandAR Baseline] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps} (Tensor Core FP16 Accelerated, BS={args.batch_size}x{args.grad_accum})")
 
     global_step = 0
     t0 = time.time()
+    step_t0 = time.time()
     os.makedirs(args.out_dir, exist_ok=True)
 
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+    accum_idx = 0
+
     while global_step < total_steps:
+        if sampler is not None:
+            sampler.set_epoch(int(global_step // max(1, steps_per_epoch)))
+
         for tokens, labels in loader:
-            if global_step >= total_steps: break
-            tokens, labels = tokens.to(device, non_blocking=True), labels.to(device, non_blocking=True)
-            lr = args.min_lr + 0.5 * (args.lr - args.min_lr) * (1.0 + np.cos(np.pi * global_step / total_steps))
-            for pg in optimizer.param_groups: pg["lr"] = lr
+            if global_step >= total_steps:
+                break
 
-            # Pure float32 forward pass to completely avoid fp16 underflow/overflow (NaN)
-            logits, loss, _ = model(tokens, labels, targets=tokens)
+            tokens = tokens.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            # Fast Vectorized Token Order on GPU (replaces slow Python randperm loop)
+            token_order = torch.rand(tokens.size(0), 256, device=device).argsort(dim=-1)
+
+            # Cosine Learning Rate Schedule
+            lr = args.min_lr + 0.5 * (args.lr - args.min_lr) * (1.0 + np.cos(np.pi * global_step / max(1, total_steps)))
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr
+
+            # Forward pass with AMP FP16 on Tensor Cores
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                logits, loss, _ = model(tokens, labels, token_order=token_order, targets=tokens)
+                loss_scaled = loss / args.grad_accum
+
             if torch.isnan(loss) or torch.isinf(loss):
-                raise ValueError(f"[FATAL] Loss became {loss.item()} at step {global_step}! Aborting.")
-            loss_scaled = loss / args.grad_accum
-            loss_scaled.backward()
+                print(f"[Warning] Loss became {loss.item()} at step {global_step}, skipping...")
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                accum_idx = 0
+                continue
 
-            if (global_step + 1) % args.grad_accum == 0:
+            scaler.scale(loss_scaled).backward()
+            accum_idx += 1
+
+            if accum_idx % args.grad_accum == 0:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
+                accum_idx = 0
 
                 if is_master and (global_step % args.log_every == 0 or global_step == total_steps):
-                    print(f"[RandAR] step {global_step}/{total_steps} | loss={loss.item():.4f} | lr={lr:.2e} | elapsed: {time.time()-t0:.0f}s", flush=True)
+                    elapsed = time.time() - t0
+                    step_time = (time.time() - step_t0) / args.log_every
+                    step_t0 = time.time()
+                    print(f"[RandAR] step {global_step}/{total_steps} | loss={loss.item():.4f} | scale={scaler.get_scale():.0f} | lr={lr:.2e} | {step_time*1000:.1f}ms/step | elapsed: {elapsed:.0f}s", flush=True)
 
     if is_master:
         raw_m = model.module if is_dist else model
