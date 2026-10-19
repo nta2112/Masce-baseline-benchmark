@@ -93,7 +93,7 @@ def forward_train_masc_stable(self, idx, cond_idx, token_order=None, input_pos=N
     freqs_cis = torch.cat((self.freqs_cis[:self.cls_token_num].unsqueeze(0).repeat(bs, 1, 1, 1), interleave_tokens(token_freqs_cis, token_freqs_cis)), dim=1)
 
     for layer in self.layers:
-        if self.grad_checkpointing:
+        if getattr(self, "grad_checkpointing", True):
             h = checkpoint(layer, h, freqs_cis, input_pos, mask, use_reentrant=False)
         else:
             h = layer(h, freqs_cis, input_pos, mask)
@@ -114,13 +114,13 @@ def main():
     parser.add_argument("--codes-dir", type=str, required=True)
     parser.add_argument("--k", type=int, default=4096)
     parser.add_argument("--epochs", type=float, default=10.0)
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--grad-accum", type=int, default=2)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--min-lr", type=float, default=1e-6)
     parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument("--upipe-entropy", type=float, default=0.05)
-    parser.add_argument("--grad-checkpointing", action="store_true", default=False)
+    parser.add_argument("--no-grad-checkpointing", action="store_true", default=False)
     parser.add_argument("--out-dir", type=str, default="checkpoints_randar_masc")
     parser.add_argument("--save-every", type=int, default=5)
     parser.add_argument("--log-every", type=int, default=50)
@@ -152,8 +152,10 @@ def main():
 
     cfg_path = os.path.join(args.randar_repo, "configs/randar/randar_l_0.3b_llamagen.yaml")
     config = OmegaConf.load(cfg_path)
-    config.ar_model.params.grad_checkpointing = args.grad_checkpointing
+    use_checkpointing = not args.no_grad_checkpointing
+    config.ar_model.params.grad_checkpointing = use_checkpointing
     model = instantiate_from_config(config.ar_model).to(device)
+    model.grad_checkpointing = use_checkpointing
 
     model.forward_train = types.MethodType(forward_train_masc_stable, model)
 
@@ -183,7 +185,7 @@ def main():
     steps_per_epoch = len(loader) // args.grad_accum
     total_steps = int(args.epochs * steps_per_epoch)
     if is_master:
-        print(f"[RandAR+MASC+UPipe] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps} (Pure Float32, BS={args.batch_size}x{args.grad_accum}, Checkpointing={args.grad_checkpointing})")
+        print(f"[RandAR+MASC+UPipe] Samples: {len(dataset):,} | Steps/epoch: {steps_per_epoch} | Total: {total_steps} (Pure Float32, BS={args.batch_size}x{args.grad_accum}, Checkpointing={use_checkpointing})")
 
     global_step = 0
     t0 = time.time()
