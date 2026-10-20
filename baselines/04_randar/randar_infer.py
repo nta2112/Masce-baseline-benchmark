@@ -46,6 +46,7 @@ def main():
         st = torch.load(args.ckpt, map_location="cpu")
         w = st.get("model", st)
     model.load_state_dict(w, strict=False)
+    model = model.to(device)
     model.eval()
     print(f"[RandAR Inference] Loaded model from: {args.ckpt} (Float32)")
 

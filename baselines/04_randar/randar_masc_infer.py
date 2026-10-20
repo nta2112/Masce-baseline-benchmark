@@ -60,14 +60,15 @@ def main():
     model = instantiate_from_config(config.ar_model).to(device=device, dtype=precision)
     dim = model.output.in_features
     embed_dim = model.tok_embeddings.embedding_dim
-    model.output = nn.Linear(dim, args.k, bias=False, dtype=precision)
-    model.tok_embeddings = nn.Embedding(args.k, embed_dim, dtype=precision)
+    model.output = nn.Linear(dim, args.k, bias=False, dtype=precision, device=device)
+    model.tok_embeddings = nn.Embedding(args.k, embed_dim, dtype=precision, device=device)
     model.vocab_size = args.k
 
     st = torch.load(args.ckpt, map_location="cpu")
     w = st.get("model", st)
     clean_w = {k.replace("module.", ""): v for k, v in w.items()}
     model.load_state_dict(clean_w, strict=True)
+    model = model.to(device)
     model.eval()
     print(f"[RandAR+MASC Inference] Loaded checkpoint: {args.ckpt} (Float32)")
 
