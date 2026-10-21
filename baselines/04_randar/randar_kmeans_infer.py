@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--cfg", type=float, default=None)
     parser.add_argument("--cfg-scales", type=str, default="1.0,4.0")
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=1000)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--steps", type=int, default=88)
@@ -89,7 +90,7 @@ def main():
                 token_order=None,
                 cfg_scales=cfg_scales,
                 num_inference_steps=args.steps,
-                temperature=1.0,
+                temperature=args.temperature,
                 top_k=args.top_k,
                 top_p=args.top_p,
             )
