@@ -119,7 +119,7 @@ def main():
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--min-lr", type=float, default=1e-6)
     parser.add_argument("--warmup-steps", type=int, default=100)
-    parser.add_argument("--upipe-entropy", type=float, default=0.05)
+    parser.add_argument("--upipe-entropy", type=float, default=0.0)
     parser.add_argument("--no-grad-checkpointing", action="store_true", default=False)
     parser.add_argument("--out-dir", type=str, default="checkpoints_randar_masc")
     parser.add_argument("--save-every", type=int, default=5)
