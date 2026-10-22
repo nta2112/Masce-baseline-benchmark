@@ -8,6 +8,7 @@ This repository contains the standalone benchmark modules and reproducible evalu
 3. **Method 3:** `03_var` — Visual Autoregressive Modeling (Next-scale prediction, NeurIPS 2024).
 4. **Method 4:** `04_randar` — RandAR (Random-Order Autoregressive Visual Generation, CVPR 2025 Oral).
 5. **Method 5:** `05_iar` — IAR (Cluster-Oriented Token Prediction, CVPR 2025 / ICML 2026 Table 3).
+6. **Method 6:** `06_ctf` — CTF (Coarse-to-Fine Token Prediction, CVPR 2025 / ICML 2026 Table 3).
 
 ---
 
@@ -19,10 +20,11 @@ Benchmark/
 │   ├── 02_kmeans_clustering/    # k-Means codebook mapping generator
 │   ├── 03_var/                  # VAR Next-Scale Runner & MASC integration
 │   ├── 04_randar/               # RandAR Baseline, k-Means, and MASC+UPipe
-│   └── 05_iar/                  # IAR Baseline, k-Means, and MASC
+│   ├── 05_iar/                  # IAR Baseline, k-Means, and MASC
+│   └── 06_ctf/                  # CTF Baseline, k-Means, and MASC
 ├── configs/                     # Configs for models & training
 ├── notebooks/
-│   ├── notebook_base/           # Standalone Kaggle notebooks (iar, randar, var)
+│   ├── notebook_base/           # Standalone Kaggle notebooks (ctf, iar, randar, var)
 │   └── kq/                      # Kaggle run records & logs
 ├── evaluations/                 # LlamaGen official evaluator (TF Inception-v3)
 └── results/                     # Benchmark logs, checkpoints, metric tables
