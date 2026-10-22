@@ -124,20 +124,41 @@ REF_INPUT_CANDIDATES = [
     '/kaggle/input/ref-10class-balanced-1000/ref_10class_balanced_1000.npz',
 ] + glob.glob('/kaggle/input/**/ref_10class_balanced_1000.npz', recursive=True)
 
-existing_ref = next((p for p in REF_INPUT_CANDIDATES if os.path.exists(p) and os.path.isfile(p)), None)
-if existing_ref and existing_ref != REF_NPZ:
+existing_ref = next((p for p in REF_INPUT_CANDIDATES if os.path.exists(p) and os.path.getsize(p) > 1000000), None)
+if existing_ref and not os.path.exists(REF_NPZ):
+    print(f'✅ Tìm thấy Reference Batch có sẵn trong input: {existing_ref}')
     shutil.copy(existing_ref, REF_NPZ)
-    print(f'✅ Đã tìm thấy Reference Batch có sẵn: {existing_ref}')
+    print(f'   -> Đã sao chép sang: {REF_NPZ} ({os.path.getsize(REF_NPZ)/1e6:.1f} MB)')
 
-existing_shards = sorted(glob.glob(f'{CODES_DIR}/shard_*.npy'))
-if len(existing_shards) < 20 or not os.path.exists(labels_path):
-    print('Đang tải imagenet-llamagen-cache để lấy đúng 10,000 ảnh huấn luyện...')
-    cache_dir = snapshot_download('fun-research/imagenet-llamagen-cache')
-    tar_path = Path(cache_dir) / 'imagenet_llamagen_cache.tar'
+input_shards = glob.glob('/kaggle/input/**/shard_00000.npy', recursive=True)
+if input_shards and not os.path.exists(labels_path):
+    src_dir = os.path.dirname(input_shards[0])
+    src_labels = os.path.join(src_dir, 'labels.npy')
+    if os.path.exists(src_labels):
+        print(f'✅ Tìm thấy Token codes có sẵn trong input: {src_dir}')
+        for f in glob.glob(f'{src_dir}/*.npy'):
+            shutil.copy(f, CODES_DIR)
+
+existing_npy = sorted(Path(CODES_DIR).glob('shard_*.npy'))
+if not (existing_npy and os.path.exists(labels_path) and len(np.load(labels_path)) == 10000):
     WDS_DIR = f'{WORK_DIR}/wds_cache'
     os.makedirs(WDS_DIR, exist_ok=True)
+    os.makedirs(CODES_DIR, exist_ok=True)
 
-    print('Đang trích xuất 10 class từ imagenet_llamagen_cache.tar...')
+    tar_files = sorted(Path('/kaggle/input').glob('**/*.tar'))
+    if not tar_files:
+        print('Đang tải imagenet-llamagen-cache từ HuggingFace (repo_type=dataset)...')
+        snapshot_download(
+            repo_id='Efficient-Large-Model/imagenet-llamagen-cache',
+            repo_type='dataset',
+            local_dir=WDS_DIR,
+            ignore_patterns=['*.json', '*.yaml', 'README*'],
+        )
+        tar_files = sorted(Path(WDS_DIR).glob('**/*.tar'))
+
+    assert len(tar_files) > 0, 'Không tìm thấy file tar của dataset!'
+    tar_path = tar_files[0]
+    print(f'Đang trích xuất 10 class từ {tar_path.name}...')
     TARGET_SYNSETS = {
         'n01440764': 0, 'n01443537': 1, 'n01484850': 2, 'n01491361': 3, 'n01494475': 4,
         'n01496331': 5, 'n01498041': 6, 'n01514668': 7, 'n01514859': 8, 'n01518878': 9,
@@ -586,23 +607,44 @@ REF_INPUT_CANDIDATES = [
     '/kaggle/input/ref-10class-balanced-1000/ref_10class_balanced_1000.npz',
 ] + glob.glob('/kaggle/input/**/ref_10class_balanced_1000.npz', recursive=True)
 
-existing_ref = next((p for p in REF_INPUT_CANDIDATES if os.path.exists(p) and os.path.isfile(p)), None)
-if existing_ref and existing_ref != REF_NPZ:
+existing_ref = next((p for p in REF_INPUT_CANDIDATES if os.path.exists(p) and os.path.getsize(p) > 1000000), None)
+if existing_ref and not os.path.exists(REF_NPZ):
+    print(f'✅ Tìm thấy Reference Batch có sẵn trong input: {existing_ref}')
     shutil.copy(existing_ref, REF_NPZ)
-    print(f'✅ Đã tìm thấy Reference Batch có sẵn: {existing_ref}')
+    print(f'   -> Đã sao chép sang: {REF_NPZ} ({os.path.getsize(REF_NPZ)/1e6:.1f} MB)')
 
-existing_shards = sorted(glob.glob(f'{CODES_DIR}/shard_*.npy'))
-if len(existing_shards) < 20 or not os.path.exists(labels_path):
-    print('Đang tải imagenet-llamagen-cache để lấy đúng 10,000 ảnh huấn luyện...')
-    cache_dir = snapshot_download('fun-research/imagenet-llamagen-cache')
-    tar_path = Path(cache_dir) / 'imagenet_llamagen_cache.tar'
+input_shards = glob.glob('/kaggle/input/**/shard_00000.npy', recursive=True)
+if input_shards and not os.path.exists(labels_path):
+    src_dir = os.path.dirname(input_shards[0])
+    src_labels = os.path.join(src_dir, 'labels.npy')
+    if os.path.exists(src_labels):
+        print(f'✅ Tìm thấy Token codes có sẵn trong input: {src_dir}')
+        for f in glob.glob(f'{src_dir}/*.npy'):
+            shutil.copy(f, CODES_DIR)
+
+existing_npy = sorted(Path(CODES_DIR).glob('shard_*.npy'))
+if not (existing_npy and os.path.exists(labels_path) and len(np.load(labels_path)) == 10000):
     WDS_DIR = f'{WORK_DIR}/wds_cache'
     os.makedirs(WDS_DIR, exist_ok=True)
+    os.makedirs(CODES_DIR, exist_ok=True)
 
-    print('Đang trích xuất 10 class từ imagenet_llamagen_cache.tar...')
+    tar_files = sorted(Path('/kaggle/input').glob('**/*.tar'))
+    if not tar_files:
+        print('Đang tải imagenet-llamagen-cache từ HuggingFace (repo_type=dataset)...')
+        snapshot_download(
+            repo_id='Efficient-Large-Model/imagenet-llamagen-cache',
+            repo_type='dataset',
+            local_dir=WDS_DIR,
+            ignore_patterns=['*.json', '*.yaml', 'README*'],
+        )
+        tar_files = sorted(Path(WDS_DIR).glob('**/*.tar'))
+
+    assert len(tar_files) > 0, 'Không tìm thấy file tar của dataset!'
+    tar_path = tar_files[0]
+    print(f'Đang trích xuất 10 class từ {tar_path.name}...')
     TARGET_SYNSETS = {
         'n01440764': 0, 'n01443537': 1, 'n01484850': 2, 'n01491361': 3, 'n01494475': 4,
-        'n01496331': 5, 'n01498041': 6, 'n01514668': 7, 'n01518878': 8, 'n01518878': 9,
+        'n01496331': 5, 'n01498041': 6, 'n01514668': 7, 'n01514859': 8, 'n01518878': 9,
     }
     MAX_PER_CLASS = 1000
     class_counts = {c: 0 for c in range(10)}
