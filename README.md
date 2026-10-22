@@ -3,9 +3,11 @@ A Comprehensive Benchmark Suite Comparing MASC + UPipe Against Baseline and SOTA
 
 ## 📌 Repository Overview
 This repository contains the standalone benchmark modules and reproducible evaluation pipelines for:
-1. **Method 1:** `01_vanilla_llamagen` — Baseline LlamaGen (Flat vocabulary N=16,384, standard attention).
-2. **Method 2 (Coming next):** `02_kmeans_clustering` — Euclidean k-means codebook prior (k=4,096).
-3. **Method 3 (Coming next):** `03_var` — Visual Autoregressive Modeling (Next-scale prediction).
+1. **Method 1:** `01_vanilla_llamagen` — Baseline LlamaGen (Flat vocabulary N=16,384, standard raster-scan).
+2. **Method 2:** `02_kmeans_clustering` — Euclidean k-Means codebook prior (k=4,096).
+3. **Method 3:** `03_var` — Visual Autoregressive Modeling (Next-scale prediction, NeurIPS 2024).
+4. **Method 4:** `04_randar` — RandAR (Random-Order Autoregressive Visual Generation, CVPR 2025 Oral).
+5. **Method 5:** `05_iar` — IAR (Cluster-Oriented Token Prediction, CVPR 2025 / ICML 2026 Table 3).
 
 ---
 
@@ -13,13 +15,17 @@ This repository contains the standalone benchmark modules and reproducible evalu
 ```
 Benchmark/
 ├── baselines/
-│   └── 01_vanilla_llamagen/     # Vanilla LlamaGen Runner & Model Profiler
-├── configs/
-│   └── vanilla_llamagen_l.yaml  # Config for training & evaluation
+│   ├── 01_vanilla_llamagen/     # Vanilla LlamaGen Runner & Model Profiler
+│   ├── 02_kmeans_clustering/    # k-Means codebook mapping generator
+│   ├── 03_var/                  # VAR Next-Scale Runner & MASC integration
+│   ├── 04_randar/               # RandAR Baseline, k-Means, and MASC+UPipe
+│   └── 05_iar/                  # IAR Baseline, k-Means, and MASC
+├── configs/                     # Configs for models & training
 ├── notebooks/
-│   └── benchmark_llamagen_vs_masc.ipynb # All-in-one Kaggle Notebook
-├── evaluations/                 # Evaluator scripts
-└── results/                     # Benchmark logs & metric tables
+│   ├── notebook_base/           # Standalone Kaggle notebooks (iar, randar, var)
+│   └── kq/                      # Kaggle run records & logs
+├── evaluations/                 # LlamaGen official evaluator (TF Inception-v3)
+└── results/                     # Benchmark logs, checkpoints, metric tables
 ```
 
 ---
