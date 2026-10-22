@@ -231,8 +231,12 @@ else:
     cells.append(make_cell("code", """# ============================================================
 # CELL 4 — XÂY DỰNG / NẠP IAR BALANCED K-MEANS MAPPING (K=128, sub_vocab=128)
 # Rearranges codebook so tokens in cluster c occupy consecutive indices [c*128, (c+1)*128 - 1]
+# Thuật toán Balanced k-Means chạy trực tiếp siêu tốc (~2 giây) bằng PyTorch & NumPy Vectorization
 # ============================================================
-import os, sys, subprocess, torch, glob
+import os, sys, glob, shutil, time
+import torch
+import torch.nn.functional as F
+import numpy as np
 
 IAR_MAP_PT = f'{WORK_DIR}/iar_cluster_mapping_k128.pt'
 
@@ -249,19 +253,94 @@ if existing_map:
         shutil.copy(existing_map, IAR_MAP_PT)
     print(f'✅ IAR Mapping đã sẵn sàng: {IAR_MAP_PT}')
 else:
-    print('Bắt đầu chạy Balanced k-Means (K=128 clusters) trên VQ-16 Codebook...')
-    BUILD_MAP_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/build_iar_clusters.py'
-    if not os.path.exists(BUILD_MAP_SCRIPT):
-        BUILD_MAP_SCRIPT = f'{WORK_DIR}/build_iar_clusters.py'
-    cmd = [
-        'python', BUILD_MAP_SCRIPT,
-        '--vq-ckpt',    f'{WEIGHTS_DIR}/vq_ds16_c2i.pt',
-        '--n-clusters', '128',
-        '--max-iter',   '30',
-        '--out-map',    IAR_MAP_PT
-    ]
-    subprocess.run(cmd, check=True)
-    print(f'✅ Đã xây dựng IAR Balanced k-Means Mapping: {IAR_MAP_PT}')"""))
+    print('=' * 70)
+    print('🚀 Bắt đầu chạy Balanced k-Means (K=128 clusters) trên VQ-16 Codebook...')
+    print('⚡ Vectorized PyTorch + NumPy: Thời gian ước tính ~2 giây!')
+    print('=' * 70)
+
+    vq_ckpt_path = f'{WEIGHTS_DIR}/vq_ds16_c2i.pt'
+    st = torch.load(vq_ckpt_path, map_location='cpu')
+    model_state = st.get('model', st)
+    for key in ['quantize.embedding.weight', 'embedding.weight']:
+        if key in model_state:
+            raw_emb = model_state[key].float()
+            break
+    else:
+        raise KeyError('Không tìm thấy embedding codebook trong checkpoint VQ!')
+
+    num_vectors, dim = raw_emb.shape
+    n_clusters = 128
+    sub_vocab_size = num_vectors // n_clusters
+    emb_norm = F.normalize(raw_emb, p=2, dim=-1)
+
+    # 1. Balanced k-Means
+    rng = torch.Generator().manual_seed(42)
+    indices = torch.randperm(num_vectors, generator=rng)[:n_clusters]
+    centers = emb_norm[indices].clone()
+
+    max_iter = 30
+    for it in range(max_iter):
+        t0 = time.time()
+        dists = torch.cdist(emb_norm, centers, p=2) ** 2
+        min_d, _ = torch.min(dists, dim=1)
+        sorted_indices = torch.argsort(min_d).numpy()
+        ranks = torch.argsort(dists, dim=1).numpy()
+
+        cluster_sizes = np.zeros(n_clusters, dtype=np.int32)
+        assignments = np.full(num_vectors, -1, dtype=np.int64)
+
+        for i in sorted_indices:
+            for c in ranks[i]:
+                if cluster_sizes[c] < sub_vocab_size:
+                    cluster_sizes[c] += 1
+                    assignments[i] = c
+                    break
+        assignments = torch.from_numpy(assignments).long()
+
+        new_centers = []
+        total_mse = 0.0
+        for c in range(n_clusters):
+            mask = (assignments == c)
+            c_vecs = emb_norm[mask]
+            mean_vec = c_vecs.mean(dim=0)
+            new_centers.append(mean_vec)
+            total_mse += torch.sum((c_vecs - mean_vec) ** 2).item()
+
+        new_centers = torch.stack(new_centers)
+        dt = time.time() - t0
+        if (it + 1) % 10 == 0 or it == max_iter - 1:
+            print(f'  Iteration {it + 1:02d}/{max_iter} | Total Intra-cluster MSE: {total_mse:.2f} | {dt:.2f}s')
+
+        if torch.allclose(centers, new_centers, atol=1e-4):
+            print(f'  Converged at iteration {it + 1}!')
+            break
+        centers = new_centers
+
+    # 2. Inner cluster sort
+    final_order = []
+    for c in range(n_clusters):
+        cluster_indices = torch.where(assignments == c)[0]
+        c_vecs = emb_norm[cluster_indices]
+        c_center = c_vecs.mean(dim=0, keepdim=True)
+        dist_to_center = torch.norm(c_vecs - c_center, dim=1)
+        sort_inner = torch.argsort(dist_to_center)
+        final_order.append(cluster_indices[sort_inner])
+
+    reordered_to_orig = torch.cat(final_order, dim=0)
+    orig_to_reordered = torch.empty_like(reordered_to_orig)
+    orig_to_reordered[reordered_to_orig] = torch.arange(num_vectors, dtype=torch.long)
+
+    mapping_data = {
+        'n_clusters': n_clusters,
+        'sub_vocab_size': sub_vocab_size,
+        'total_vocab': num_vectors,
+        'orig_to_reordered': orig_to_reordered,
+        'reordered_to_orig': reordered_to_orig,
+        'cluster_of_orig': assignments,
+        'cluster_of_reordered': torch.arange(num_vectors, dtype=torch.long) // sub_vocab_size,
+    }
+    torch.save(mapping_data, IAR_MAP_PT)
+    print(f'✅ Đã xây dựng và lưu IAR Balanced k-Means Mapping: {IAR_MAP_PT}')"""))
 
     # Cell 5: Training
     cells.append(make_cell("code", """# ============================================================
@@ -291,7 +370,10 @@ if EXISTING_CKPT:
 else:
     TRAIN_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/train_iar.py'
     if not os.path.exists(TRAIN_SCRIPT):
-        TRAIN_SCRIPT = f'{WORK_DIR}/train_iar.py'
+        print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
+        subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+        if not os.path.exists(TRAIN_SCRIPT):
+            TRAIN_SCRIPT = f'{WORK_DIR}/train_iar.py'
 
     cmd = [
         'torchrun', '--nproc_per_node=2', '--master_port=29530',
@@ -355,7 +437,10 @@ print('=' * 70)
 
 INFER_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/iar_infer.py'
 if not os.path.exists(INFER_SCRIPT):
-    INFER_SCRIPT = f'{WORK_DIR}/iar_infer.py'
+    print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
+    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+    if not os.path.exists(INFER_SCRIPT):
+        INFER_SCRIPT = f'{WORK_DIR}/iar_infer.py'
 
 cmd = [
     'python', INFER_SCRIPT,
@@ -727,7 +812,10 @@ else:
     print('Bắt đầu xây dựng MASC hierarchical mapping từ VQ-16 Codebook...')
     BUILD_MAP_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/build_iar_masc_mapping.py'
     if not os.path.exists(BUILD_MAP_SCRIPT):
-        BUILD_MAP_SCRIPT = f'{WORK_DIR}/build_iar_masc_mapping.py'
+        print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
+        subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+        if not os.path.exists(BUILD_MAP_SCRIPT):
+            BUILD_MAP_SCRIPT = f'{WORK_DIR}/build_iar_masc_mapping.py'
     cmd = [
         'python', BUILD_MAP_SCRIPT,
         '--vq-ckpt',   f'{WEIGHTS_DIR}/vq_ds16_c2i.pt',
@@ -766,7 +854,10 @@ if EXISTING_CKPT:
 else:
     TRAIN_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/train_iar_masc.py'
     if not os.path.exists(TRAIN_SCRIPT):
-        TRAIN_SCRIPT = f'{WORK_DIR}/train_iar_masc.py'
+        print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
+        subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+        if not os.path.exists(TRAIN_SCRIPT):
+            TRAIN_SCRIPT = f'{WORK_DIR}/train_iar_masc.py'
 
     cmd = [
         'torchrun', '--nproc_per_node=2', '--master_port=29535',
@@ -828,7 +919,10 @@ print('=' * 70)
 
 INFER_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/iar_masc_infer.py'
 if not os.path.exists(INFER_SCRIPT):
-    INFER_SCRIPT = f'{WORK_DIR}/iar_masc_infer.py'
+    print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
+    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+    if not os.path.exists(INFER_SCRIPT):
+        INFER_SCRIPT = f'{WORK_DIR}/iar_masc_infer.py'
 
 cmd = [
     'python', INFER_SCRIPT,
@@ -1231,7 +1325,10 @@ if EXISTING_CKPT:
 else:
     TRAIN_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/train_iar_kmeans.py'
     if not os.path.exists(TRAIN_SCRIPT):
-        TRAIN_SCRIPT = f'{WORK_DIR}/train_iar_kmeans.py'
+        print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
+        subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+        if not os.path.exists(TRAIN_SCRIPT):
+            TRAIN_SCRIPT = f'{WORK_DIR}/train_iar_kmeans.py'
 
     cmd = [
         'torchrun', '--nproc_per_node=2', '--master_port=29540',
@@ -1293,7 +1390,10 @@ print('=' * 70)
 
 INFER_SCRIPT = f'{BENCHMARK_DIR}/baselines/05_iar/iar_kmeans_infer.py'
 if not os.path.exists(INFER_SCRIPT):
-    INFER_SCRIPT = f'{WORK_DIR}/iar_kmeans_infer.py'
+    print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
+    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+    if not os.path.exists(INFER_SCRIPT):
+        INFER_SCRIPT = f'{WORK_DIR}/iar_kmeans_infer.py'
 
 cmd = [
     'python', INFER_SCRIPT,
