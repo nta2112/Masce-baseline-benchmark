@@ -135,6 +135,16 @@ def main():
         missing, unexpected = model.load_state_dict(clean_w, strict=False)
         if is_master:
             print(f"[IAR Baseline] Loaded pretrained weights from {args.pretrained} (missing={len(missing)}, unexpected={len(unexpected)})")
+
+        # Permute embedding and output linear head according to IAR reordering
+        with torch.no_grad():
+            perm = map_data["reordered_to_orig"].to(device=model.tok_embeddings.weight.device, dtype=torch.long)
+            model.tok_embeddings.weight.data = model.tok_embeddings.weight.data[perm].clone()
+            model.output.weight.data = model.output.weight.data[perm].clone()
+            if model.output.bias is not None:
+                model.output.bias.data = model.output.bias.data[perm].clone()
+        if is_master:
+            print("[IAR Baseline] ✅ Permuted tok_embeddings and output weights to match reordered codebook!")
     else:
         if is_master:
             print(f"[Warning] Pretrained weights not found at {args.pretrained}; initializing from scratch.")
