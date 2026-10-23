@@ -312,9 +312,12 @@ CKPT_CTF_DIR      = f'{WORK_DIR}/checkpoints_ctf_baseline'
 CTF_MAP_PT        = f'{WORK_DIR}/ctf_kmeans_mapping_k4096.pt'
 GPT_CKPT_PATH     = f'{WEIGHTS_DIR}/c2i_B_256.pt'
 
-CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_baseline_10class_final.pt'
-if not os.path.exists(CKPT_PATH):
-    CKPT_PATH = f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt'
+CKPT_CANDIDATES = [
+    '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_baseline_10class_final.pt',
+] + glob.glob('/kaggle/input/**/ckpt_ctf_baseline_10class_final.pt', recursive=True) + [
+    f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt'
+]
+CKPT_PATH = next((p for p in CKPT_CANDIDATES if os.path.exists(p) and os.path.getsize(p) > 10000000), f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt')
 
 if os.path.exists(CKPT_PATH):
     print('=' * 70)
@@ -380,9 +383,12 @@ CKPT_CTF_DIR      = f'{WORK_DIR}/checkpoints_ctf_baseline'
 CTF_MAP_PT        = f'{WORK_DIR}/ctf_kmeans_mapping_k4096.pt'
 SAMPLE_NPZ        = f'{WORK_DIR}/samples_ctf_baseline_1000.npz'
 
-CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_baseline_10class_final.pt'
-if not os.path.exists(CKPT_PATH):
-    CKPT_PATH = f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt'
+CKPT_CANDIDATES = [
+    '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_baseline_10class_final.pt',
+] + glob.glob('/kaggle/input/**/ckpt_ctf_baseline_10class_final.pt', recursive=True) + [
+    f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt'
+]
+CKPT_PATH = next((p for p in CKPT_CANDIDATES if os.path.exists(p) and os.path.getsize(p) > 10000000), f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt')
 
 if not os.path.exists(CKPT_PATH):
     raise FileNotFoundError(f'Không tìm thấy checkpoint tại: {CKPT_PATH}')
@@ -745,9 +751,10 @@ CTF_MASC_MAP_PT = f'{WORK_DIR}/ctf_masc_mapping_k4096.pt'
 MAP_CANDIDATES = [
     CTF_MASC_MAP_PT,
     '/kaggle/input/datasets/nta212/masc-file/masc_mapping_k4096.npz',
+    f'{BENCHMARK_DIR}/baselines/06_ctf/ctf_masc_mapping_k4096.pt',
+    f'{BENCHMARK_DIR}/baselines/06_ctf/masc_mapping_k4096.npz',
     f'{MASC_DIR}/masc_mapping_k4096.pt',
     f'{MASC_DIR}/masc_mapping_k4096.npz',
-    f'{BENCHMARK_DIR}/baselines/06_ctf/ctf_masc_mapping_k4096.pt',
 ] + glob.glob('/kaggle/input/**/masc_mapping_k4096*.pt', recursive=True) \\
   + glob.glob('/kaggle/input/**/masc_mapping_k4096*.npz', recursive=True)
 
@@ -756,8 +763,8 @@ existing_map = next((p for p in MAP_CANDIDATES if os.path.exists(p)), None)
 if existing_map:
     print(f'✅ Tìm thấy MASC mapping có sẵn: {existing_map}')
     if existing_map.endswith('.pt'):
-        map_data = torch.load(existing_map, map_location='cpu')
-        torch.save(map_data, CTF_MASC_MAP_PT)
+        if existing_map != CTF_MASC_MAP_PT:
+            shutil.copy(existing_map, CTF_MASC_MAP_PT)
     else:
         np_map = np.load(existing_map)
         mapping_tensor = torch.from_numpy(np_map['mapping']).long()
@@ -807,9 +814,12 @@ CKPT_CTF_MASC_DIR = f'{WORK_DIR}/checkpoints_ctf_masc'
 CTF_MASC_MAP_PT   = f'{WORK_DIR}/ctf_masc_mapping_k4096.pt'
 GPT_CKPT_PATH     = f'{WEIGHTS_DIR}/c2i_B_256.pt'
 
-CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_masc_10class_final.pt'
-if not os.path.exists(CKPT_PATH):
-    CKPT_PATH = f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt'
+CKPT_CANDIDATES = [
+    '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_masc_10class_final.pt',
+] + glob.glob('/kaggle/input/**/ckpt_ctf_masc_10class_final.pt', recursive=True) + [
+    f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt'
+]
+CKPT_PATH = next((p for p in CKPT_CANDIDATES if os.path.exists(p) and os.path.getsize(p) > 10000000), f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt')
 
 if os.path.exists(CKPT_PATH):
     print('=' * 70)
@@ -875,9 +885,12 @@ CKPT_CTF_MASC_DIR = f'{WORK_DIR}/checkpoints_ctf_masc'
 CTF_MASC_MAP_PT   = f'{WORK_DIR}/ctf_masc_mapping_k4096.pt'
 SAMPLE_NPZ        = f'{WORK_DIR}/samples_ctf_masc_1000.npz'
 
-CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_masc_10class_final.pt'
-if not os.path.exists(CKPT_PATH):
-    CKPT_PATH = f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt'
+CKPT_CANDIDATES = [
+    '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_masc_10class_final.pt',
+] + glob.glob('/kaggle/input/**/ckpt_ctf_masc_10class_final.pt', recursive=True) + [
+    f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt'
+]
+CKPT_PATH = next((p for p in CKPT_CANDIDATES if os.path.exists(p) and os.path.getsize(p) > 10000000), f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt')
 
 if not os.path.exists(CKPT_PATH):
     raise FileNotFoundError(f'Không tìm thấy checkpoint tại: {CKPT_PATH}')
