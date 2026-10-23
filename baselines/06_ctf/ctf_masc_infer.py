@@ -132,9 +132,14 @@ def main():
 
     st = torch.load(args.ckpt, map_location="cpu")
     if "backbone" in st:
-        backbone.load_state_dict(st["backbone"])
+        bb_st = {k.replace("module.", ""): v for k, v in st["backbone"].items()}
+        backbone.load_state_dict(bb_st)
         if "fine_refiner" in st and args.use_refiner:
-            fine_refiner.load_state_dict(st["fine_refiner"])
+            ref_st = {k.replace("module.", ""): v for k, v in st["fine_refiner"].items()}
+            fine_refiner.load_state_dict(ref_st)
+        elif args.use_refiner:
+            print("[Warning] Checkpoint does not contain fine_refiner weights! Falling back to coarse_to_fine_mode.")
+            args.use_refiner = False
     else:
         clean_w = {k.replace("module.", ""): v for k, v in st.items()}
         backbone.load_state_dict(clean_w, strict=False)

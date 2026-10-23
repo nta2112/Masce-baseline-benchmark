@@ -303,12 +303,25 @@ else:
 # ============================================================
 import subprocess, os, sys, shutil, glob
 
+WORK_DIR          = '/kaggle/working'
+LLAMA_DIR         = f'{WORK_DIR}/LlamaGen'
+BENCHMARK_DIR     = f'{WORK_DIR}/Benchmark'
+WEIGHTS_DIR       = f'{WORK_DIR}/weights'
+CODES_DIR         = f'{WORK_DIR}/codes'
+CKPT_CTF_DIR      = f'{WORK_DIR}/checkpoints_ctf_baseline'
+CTF_MAP_PT        = f'{WORK_DIR}/ctf_kmeans_mapping_k4096.pt'
+GPT_CKPT_PATH     = f'{WEIGHTS_DIR}/c2i_B_256.pt'
+
+USER_CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_baseline_10class_final.pt'
+
 CKPT_CANDIDATES = [
+    USER_CKPT_PATH,
+    f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt',
     '/kaggle/input/ctf-checkpoint-10class/ckpt_ctf_baseline_10class_final.pt',
     '/kaggle/input/ctf-checkpoint-10class/ckpt_ctf_baseline_epoch_10.pt',
-    f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt',
     f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_epoch_10.pt',
-] + glob.glob('/kaggle/input/**/ckpt_ctf_baseline*.pt', recursive=True)
+] + glob.glob('/kaggle/input/**/models/**/ckpt_ctf_baseline*.pt', recursive=True) \
+  + glob.glob('/kaggle/input/**/ckpt_ctf_baseline*.pt', recursive=True)
 
 EXISTING_CKPT = next((p for p in CKPT_CANDIDATES if os.path.exists(p) and os.path.isfile(p)), None)
 
@@ -318,6 +331,14 @@ if EXISTING_CKPT:
     print(f'   -> Đường dẫn: {EXISTING_CKPT}')
     print(f'   -> Dung lượng: {os.path.getsize(EXISTING_CKPT) / 1e6:.1f} MB')
     print('=' * 70)
+    os.makedirs(CKPT_CTF_DIR, exist_ok=True)
+    dst_ckpt = f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt'
+    if os.path.abspath(EXISTING_CKPT) != os.path.abspath(dst_ckpt) and not os.path.exists(dst_ckpt):
+        try:
+            shutil.copy2(EXISTING_CKPT, dst_ckpt)
+            print(f'✅ Đã sao chép checkpoint vào: {dst_ckpt}')
+        except Exception as e:
+            print(f'ℹ️ Sử dụng trực tiếp checkpoint tại {EXISTING_CKPT}')
     print('⏩ BỎ QUA QUÁ TRÌNH HUẤN LUYỆN!')
     print('👉 Chuyển thẳng sang CELL 6 để sinh 1,000 ảnh mẫu và CELL 7 để đánh giá Metrics.')
 else:
@@ -368,18 +389,32 @@ else:
     cells.append(make_cell("code", """# ============================================================
 # CELL 6 — SINH 1,000 ẢNH MẪU TỪ CTF BASELINE (10-CLASS CÂN BẰNG)
 # ============================================================
-import os, subprocess, glob
+import os, subprocess, glob, sys, shutil
 
-SAMPLE_NPZ = f'{WORK_DIR}/samples_ctf_baseline_1000.npz'
+WORK_DIR          = '/kaggle/working'
+LLAMA_DIR         = f'{WORK_DIR}/LlamaGen'
+BENCHMARK_DIR     = f'{WORK_DIR}/Benchmark'
+WEIGHTS_DIR       = f'{WORK_DIR}/weights'
+CKPT_CTF_DIR      = f'{WORK_DIR}/checkpoints_ctf_baseline'
+CTF_MAP_PT        = f'{WORK_DIR}/ctf_kmeans_mapping_k4096.pt'
+SAMPLE_NPZ        = f'{WORK_DIR}/samples_ctf_baseline_1000.npz'
+
+USER_CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_baseline_10class_final.pt'
 
 INFER_CKPT = next((p for p in [
+    USER_CKPT_PATH,
     f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_10class_final.pt',
     f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_epoch_10.pt',
     f'{CKPT_CTF_DIR}/ckpt_ctf_baseline_epoch_5.pt',
-] + glob.glob('/kaggle/input/**/ckpt_ctf_baseline*.pt', recursive=True) if os.path.exists(p)), None)
+    '/kaggle/input/ctf-checkpoint-10class/ckpt_ctf_baseline_10class_final.pt',
+] + glob.glob('/kaggle/input/**/models/**/ckpt_ctf_baseline*.pt', recursive=True) \
+  + glob.glob('/kaggle/input/**/ckpt_ctf_baseline*.pt', recursive=True) if os.path.exists(p)), None)
 
 if not INFER_CKPT:
-    raise FileNotFoundError('Không tìm thấy checkpoint CTF Baseline để sinh ảnh!')
+    raise FileNotFoundError(
+        'Không tìm thấy checkpoint CTF Baseline để sinh ảnh!\n'
+        f'Vui lòng kiểm tra lại đường dẫn: {USER_CKPT_PATH}'
+    )
 
 print('=' * 70)
 print(f'✅ Sử dụng Checkpoint CTF Baseline: {INFER_CKPT}')
@@ -421,9 +456,11 @@ print(f'✅ File ảnh mẫu hoàn thành: {SAMPLE_NPZ} ({os.path.getsize(SAMPLE
 # ============================================================
 import subprocess, os, sys, re
 
-EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
+WORK_DIR    = '/kaggle/working'
+LLAMA_DIR   = f'{WORK_DIR}/LlamaGen'
 SAMPLE_NPZ  = f'{WORK_DIR}/samples_ctf_baseline_1000.npz'
 REF_NPZ     = f'{WORK_DIR}/ref_10class_balanced_1000.npz'
+EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
 
 eval_cmd = f'CUDA_VISIBLE_DEVICES=0 python {EVAL_SCRIPT} {REF_NPZ} {SAMPLE_NPZ}'
 
@@ -790,12 +827,25 @@ else:
 # ============================================================
 import subprocess, os, sys, shutil, glob
 
+WORK_DIR          = '/kaggle/working'
+LLAMA_DIR         = f'{WORK_DIR}/LlamaGen'
+BENCHMARK_DIR     = f'{WORK_DIR}/Benchmark'
+WEIGHTS_DIR       = f'{WORK_DIR}/weights'
+CODES_DIR         = f'{WORK_DIR}/codes'
+CKPT_CTF_MASC_DIR = f'{WORK_DIR}/checkpoints_ctf_masc'
+CTF_MASC_MAP_PT   = f'{WORK_DIR}/ctf_masc_mapping_k4096.pt'
+GPT_CKPT_PATH     = f'{WEIGHTS_DIR}/c2i_B_256.pt'
+
+USER_CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_masc_10class_final.pt'
+
 CKPT_CANDIDATES = [
+    USER_CKPT_PATH,
+    f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt',
     '/kaggle/input/ctf-checkpoint-10class/ckpt_ctf_masc_10class_final.pt',
     '/kaggle/input/ctf-checkpoint-10class/ckpt_ctf_masc_epoch_10.pt',
-    f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt',
     f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_epoch_10.pt',
-] + glob.glob('/kaggle/input/**/ckpt_ctf_masc*.pt', recursive=True)
+] + glob.glob('/kaggle/input/**/models/**/ckpt_ctf_masc*.pt', recursive=True) \
+  + glob.glob('/kaggle/input/**/ckpt_ctf_masc*.pt', recursive=True)
 
 EXISTING_CKPT = next((p for p in CKPT_CANDIDATES if os.path.exists(p) and os.path.isfile(p)), None)
 
@@ -805,6 +855,14 @@ if EXISTING_CKPT:
     print(f'   -> Đường dẫn: {EXISTING_CKPT}')
     print(f'   -> Dung lượng: {os.path.getsize(EXISTING_CKPT) / 1e6:.1f} MB')
     print('=' * 70)
+    os.makedirs(CKPT_CTF_MASC_DIR, exist_ok=True)
+    dst_ckpt = f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt'
+    if os.path.abspath(EXISTING_CKPT) != os.path.abspath(dst_ckpt) and not os.path.exists(dst_ckpt):
+        try:
+            shutil.copy2(EXISTING_CKPT, dst_ckpt)
+            print(f'✅ Đã sao chép checkpoint vào: {dst_ckpt}')
+        except Exception as e:
+            print(f'ℹ️ Sử dụng trực tiếp checkpoint tại {EXISTING_CKPT}')
     print('⏩ BỎ QUA QUÁ TRÌNH HUẤN LUYỆN!')
     print('👉 Chuyển thẳng sang CELL 6 để sinh 1,000 ảnh mẫu và CELL 7 để đánh giá Metrics.')
 else:
@@ -855,18 +913,32 @@ else:
     cells.append(make_cell("code", """# ============================================================
 # CELL 6 — SINH 1,000 ẢNH MẪU TỪ CTF + MASC (10-CLASS CÂN BẰNG)
 # ============================================================
-import os, subprocess, glob
+import os, subprocess, glob, sys, shutil
 
-SAMPLE_NPZ = f'{WORK_DIR}/samples_ctf_masc_1000.npz'
+WORK_DIR          = '/kaggle/working'
+LLAMA_DIR         = f'{WORK_DIR}/LlamaGen'
+BENCHMARK_DIR     = f'{WORK_DIR}/Benchmark'
+WEIGHTS_DIR       = f'{WORK_DIR}/weights'
+CKPT_CTF_MASC_DIR = f'{WORK_DIR}/checkpoints_ctf_masc'
+CTF_MASC_MAP_PT   = f'{WORK_DIR}/ctf_masc_mapping_k4096.pt'
+SAMPLE_NPZ        = f'{WORK_DIR}/samples_ctf_masc_1000.npz'
+
+USER_CKPT_PATH = '/kaggle/input/models/chienkhu/ctf-checkpoint-comprare-masc/pytorch/default/1/ckpt_ctf_masc_10class_final.pt'
 
 INFER_CKPT = next((p for p in [
+    USER_CKPT_PATH,
     f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_10class_final.pt',
     f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_epoch_10.pt',
     f'{CKPT_CTF_MASC_DIR}/ckpt_ctf_masc_epoch_5.pt',
-] + glob.glob('/kaggle/input/**/ckpt_ctf_masc*.pt', recursive=True) if os.path.exists(p)), None)
+    '/kaggle/input/ctf-checkpoint-10class/ckpt_ctf_masc_10class_final.pt',
+] + glob.glob('/kaggle/input/**/models/**/ckpt_ctf_masc*.pt', recursive=True) \
+  + glob.glob('/kaggle/input/**/ckpt_ctf_masc*.pt', recursive=True) if os.path.exists(p)), None)
 
 if not INFER_CKPT:
-    raise FileNotFoundError('Không tìm thấy checkpoint CTF + MASC để sinh ảnh!')
+    raise FileNotFoundError(
+        'Không tìm thấy checkpoint CTF + MASC để sinh ảnh!\n'
+        f'Vui lòng kiểm tra lại đường dẫn: {USER_CKPT_PATH}'
+    )
 
 print('=' * 70)
 print(f'✅ Sử dụng Checkpoint CTF + MASC: {INFER_CKPT}')
@@ -908,9 +980,11 @@ print(f'✅ File ảnh mẫu hoàn thành: {SAMPLE_NPZ} ({os.path.getsize(SAMPLE
 # ============================================================
 import subprocess, os, sys, re
 
-EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
+WORK_DIR    = '/kaggle/working'
+LLAMA_DIR   = f'{WORK_DIR}/LlamaGen'
 SAMPLE_NPZ  = f'{WORK_DIR}/samples_ctf_masc_1000.npz'
 REF_NPZ     = f'{WORK_DIR}/ref_10class_balanced_1000.npz'
+EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
 
 eval_cmd = f'CUDA_VISIBLE_DEVICES=0 python {EVAL_SCRIPT} {REF_NPZ} {SAMPLE_NPZ}'
 
