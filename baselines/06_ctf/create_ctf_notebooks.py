@@ -342,8 +342,8 @@ else:
         '--model',         'GPT-B',
         '--k',             '4096',
         '--epochs',        '10.0',
-        '--batch-size',    '8',
-        '--grad-accum',    '2',
+        '--batch-size',    '32',
+        '--grad-accum',    '1',
         '--lr',            '5e-5',
         '--min-lr',        '1e-6',
         '--warmup-steps',  '100',
@@ -355,7 +355,7 @@ else:
 
     print('=' * 70)
     print('🚀 Bắt đầu HUẤN LUYỆN 10 Epochs cho CTF Baseline trên 2x GPU T4...')
-    print('⚡ Cấu hình: Pure Float32 Precision + Gradient Checkpointing (Zero NaN, Zero OOM, BS=8x2x2)')
+    print('⚡ Cấu hình: Pure Float32 Precision + Gradient Checkpointing (Zero NaN, Zero OOM, BS=32x2)')
     print(' '.join(cmd))
     print('=' * 70)
 
@@ -413,7 +413,7 @@ cmd = [
     '--model',         'GPT-B',
     '--k',             '4096',
     '--num-samples',   '1000',
-    '--batch-size',    '16',
+    '--batch-size',    '32',
     '--cfg',           '2.25',
     '--temperature',   '1.0',
     '--top-k',         '1000',
@@ -844,8 +844,8 @@ else:
         '--model',         'GPT-B',
         '--k',             '4096',
         '--epochs',        '10.0',
-        '--batch-size',    '8',
-        '--grad-accum',    '2',
+        '--batch-size',    '32',
+        '--grad-accum',    '1',
         '--lr',            '5e-5',
         '--min-lr',        '1e-6',
         '--warmup-steps',  '100',
@@ -857,7 +857,7 @@ else:
 
     print('=' * 70)
     print('🚀 Bắt đầu HUẤN LUYỆN 10 Epochs cho CTF + MASC (k=4,096) trên 2x GPU T4...')
-    print('⚡ Cấu hình: Pure Float32 Precision + Gradient Checkpointing (Zero NaN, Zero OOM, BS=8x2x2)')
+    print('⚡ Cấu hình: Pure Float32 Precision + Gradient Checkpointing (Zero NaN, Zero OOM, BS=32x2)')
     print(' '.join(cmd))
     print('=' * 70)
 
@@ -915,7 +915,7 @@ cmd = [
     '--model',         'GPT-B',
     '--k',             '4096',
     '--num-samples',   '1000',
-    '--batch-size',    '16',
+    '--batch-size',    '32',
     '--cfg',           '2.25',
     '--temperature',   '1.0',
     '--top-k',         '1000',

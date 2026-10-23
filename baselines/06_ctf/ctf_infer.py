@@ -88,7 +88,7 @@ def main():
     parser.add_argument("--model", type=str, default="GPT-B")
     parser.add_argument("--k", type=int, default=4096)
     parser.add_argument("--num-samples", type=int, default=1000)
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--cfg", type=float, default=2.25)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=1000)
