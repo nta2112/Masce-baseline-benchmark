@@ -21,13 +21,28 @@ def generate_coarse(model, cond, max_new_tokens=256, cfg_scale=2.25, temperature
     """
     try:
         from autoregressive.models.generate import generate
-        return generate(
+        tokens = generate(
             model, cond, max_new_tokens=max_new_tokens,
             cfg_scale=cfg_scale, temperature=temperature,
             top_k=top_k, top_p=top_p, sample_logits=True
         )
+        # Clear KV-cache buffers from attention layers so that standard parallel
+        # forward pass in Stage 2 does not fail with NoneType shape error.
+        for layer in model.layers:
+            if hasattr(layer, "attention"):
+                if hasattr(layer.attention, "kv_cache"):
+                    layer.attention.kv_cache = None
+                if hasattr(layer.attention, "orig") and hasattr(layer.attention.orig, "kv_cache"):
+                    layer.attention.orig.kv_cache = None
+        return tokens
     except Exception as e:
         print(f"[Warning] KV-cache generate fallback due to: {e}")
+        for layer in model.layers:
+            if hasattr(layer, "attention"):
+                if hasattr(layer.attention, "kv_cache"):
+                    layer.attention.kv_cache = None
+                if hasattr(layer.attention, "orig") and hasattr(layer.attention.orig, "kv_cache"):
+                    layer.attention.orig.kv_cache = None
         bs = cond.shape[0]
         device = cond.device
         cond_emb = model.cls_embedding(cond, train=False)[:, :model.cls_token_num]
@@ -63,9 +78,6 @@ def generate_coarse(model, cond, max_new_tokens=256, cfg_scale=2.25, temperature
             next_token = torch.multinomial(probs, num_samples=1)
             cur_tokens = torch.cat([cur_tokens, next_token], dim=1)
         return cur_tokens
-        cur_tokens = torch.cat([cur_tokens, next_token], dim=1)
-
-    return cur_tokens
 
 def main():
     parser = argparse.ArgumentParser(description="CTF Baseline Inference Engine")
@@ -153,6 +165,14 @@ def main():
 
             # Stage 2: Fine Refinement
             if args.use_refiner:
+                # Ensure KV cache is deactivated for full-sequence parallel forward pass
+                for layer in backbone.layers:
+                    if hasattr(layer, "attention"):
+                        if hasattr(layer.attention, "kv_cache"):
+                            layer.attention.kv_cache = None
+                        if hasattr(layer.attention, "orig") and hasattr(layer.attention.orig, "kv_cache"):
+                            layer.attention.orig.kv_cache = None
+
                 # Forward pass through backbone to extract hidden features with teacher-forcing alignment
                 cond_emb = backbone.cls_embedding(cond, train=False)[:, :backbone.cls_token_num]
                 tok_emb = backbone.tok_embeddings(coarse_tokens[:, :-1])
