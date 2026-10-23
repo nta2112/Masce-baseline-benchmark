@@ -214,27 +214,26 @@ def main():
             # RAR Randomness Annealing schedule: r(t) linearly decays from 1.0 to 0.0
             r_prob = max(0.0, 1.0 - (global_step / max(1, total_steps)))
 
-            orders = []
-            for _ in range(bs):
-                if torch.rand(1).item() < r_prob:
-                    orders.append(torch.randperm(256, device=device))
-                else:
-                    orders.append(torch.arange(256, device=device))
-            order_tensor = torch.stack(orders, dim=0)
+            # Sample permutation or raster-scan order for this step
+            if torch.rand(1).item() < r_prob:
+                order = torch.randperm(256, device=device)
+            else:
+                order = torch.arange(256, device=device)
 
-            perm_codes = torch.gather(coarse_codes, 1, order_tensor)
+            # Permute codes according to RAR order
+            perm_codes = coarse_codes[:, order]  # [bs, 256]
 
             cond_emb = raw_backbone.cls_embedding(labels, train=raw_backbone.training)[:, :raw_backbone.cls_token_num]
             token_emb = raw_backbone.tok_embeddings(perm_codes[:, :-1])
             h = torch.cat([cond_emb, token_emb], dim=1)
             h = raw_backbone.tok_dropout(h) if hasattr(raw_backbone, "tok_dropout") else h
 
+            # Assign spatial 2D RoPE frequencies to each token
+            # freqs_cis has shape [257, head_dim//2, 2] where index 0 is cls token and index 1:257 is 16x16 grid
             raw_backbone.freqs_cis = raw_backbone.freqs_cis.to(h.device)
-            base_freqs = raw_backbone.freqs_cis[:256]
-            input_orders = order_tensor[:, :-1]
-            token_freqs = base_freqs[input_orders]
-            cls_freqs = raw_backbone.freqs_cis[0].view(1, 1, -1).expand(bs, 1, -1)
-            freqs_cis = torch.cat([cls_freqs, token_freqs], dim=1)
+            cls_freq = raw_backbone.freqs_cis[0:1]  # [1, head_dim//2, 2]
+            spatial_freq = raw_backbone.freqs_cis[1:][order[:-1]]  # [255, head_dim//2, 2]
+            freqs_cis = torch.cat([cls_freq, spatial_freq], dim=0)  # [256, head_dim//2, 2]
 
             for layer in raw_backbone.layers:
                 h = layer(h, freqs_cis, None, None)
