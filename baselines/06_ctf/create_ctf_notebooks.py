@@ -322,11 +322,10 @@ if EXISTING_CKPT:
     print('👉 Chuyển thẳng sang CELL 6 để sinh 1,000 ảnh mẫu và CELL 7 để đánh giá Metrics.')
 else:
     TRAIN_SCRIPT = f'{BENCHMARK_DIR}/baselines/06_ctf/train_ctf.py'
+    print('Đang cập nhật repository Benchmark (git pull) để nạp mã nguồn mới nhất...')
+    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
     if not os.path.exists(TRAIN_SCRIPT):
-        print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
-        subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
-        if not os.path.exists(TRAIN_SCRIPT):
-            TRAIN_SCRIPT = f'{WORK_DIR}/train_ctf.py'
+        TRAIN_SCRIPT = f'{WORK_DIR}/train_ctf.py'
 
     cmd = [
         'torchrun', '--nproc_per_node=2', '--master_port=29545',
@@ -811,11 +810,10 @@ if EXISTING_CKPT:
     print('👉 Chuyển thẳng sang CELL 6 để sinh 1,000 ảnh mẫu và CELL 7 để đánh giá Metrics.')
 else:
     TRAIN_SCRIPT = f'{BENCHMARK_DIR}/baselines/06_ctf/train_ctf_masc.py'
+    print('Đang cập nhật repository Benchmark (git pull) để nạp mã nguồn mới nhất...')
+    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
     if not os.path.exists(TRAIN_SCRIPT):
-        print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
-        subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
-        if not os.path.exists(TRAIN_SCRIPT):
-            TRAIN_SCRIPT = f'{WORK_DIR}/train_ctf_masc.py'
+        TRAIN_SCRIPT = f'{WORK_DIR}/train_ctf_masc.py'
 
     cmd = [
         'torchrun', '--nproc_per_node=2', '--master_port=29550',

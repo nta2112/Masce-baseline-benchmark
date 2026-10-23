@@ -133,16 +133,16 @@ class CTFAutoregressiveModel(nn.Module):
         bs = x.shape[0]
         
         # Embeddings
-        token_emb = model.tok_embeddings(x)
-        if hasattr(model, "tok_dropout"):
-            token_emb = model.tok_dropout(token_emb)
-            
         cond_emb = model.cls_embedding(cond, train=model.training)[:, :model.cls_token_num]
-        h = torch.cat([cond_emb, token_emb], dim=1)
+        token_emb = model.tok_embeddings(x)
+        token_emb = torch.cat([cond_emb, token_emb], dim=1)
+        h = model.tok_dropout(token_emb) if hasattr(model, "tok_dropout") else token_emb
+        model.freqs_cis = model.freqs_cis.to(h.device)
+        freqs_cis = model.freqs_cis[:token_emb.shape[1]]
         
         # Forward through transformer layers
         for layer in model.layers:
-            h = layer(h)
+            h = layer(h, freqs_cis, None, None)
             
         h = model.norm(h)
         # Token-level hidden states (skipping cls tokens)

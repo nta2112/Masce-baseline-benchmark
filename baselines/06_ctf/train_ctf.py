@@ -236,14 +236,15 @@ def main():
             raw_backbone = backbone.module if is_dist else backbone
             bs = coarse_codes.shape[0]
 
-            token_emb = raw_backbone.tok_embeddings(coarse_codes)
-            if hasattr(raw_backbone, "tok_dropout"):
-                token_emb = raw_backbone.tok_dropout(token_emb)
             cond_emb = raw_backbone.cls_embedding(labels, train=raw_backbone.training)[:, :raw_backbone.cls_token_num]
-            h = torch.cat([cond_emb, token_emb], dim=1)
+            token_emb = raw_backbone.tok_embeddings(coarse_codes)
+            token_emb = torch.cat([cond_emb, token_emb], dim=1)
+            h = raw_backbone.tok_dropout(token_emb) if hasattr(raw_backbone, "tok_dropout") else token_emb
+            raw_backbone.freqs_cis = raw_backbone.freqs_cis.to(h.device)
+            freqs_cis = raw_backbone.freqs_cis[:token_emb.shape[1]]
 
             for layer in raw_backbone.layers:
-                h = layer(h)
+                h = layer(h, freqs_cis, None, None)
             h = raw_backbone.norm(h)
 
             token_h = h[:, raw_backbone.cls_token_num:]

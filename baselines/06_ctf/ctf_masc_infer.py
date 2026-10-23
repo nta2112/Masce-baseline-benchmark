@@ -35,8 +35,10 @@ def generate_coarse(model, cond, max_new_tokens=256, cfg_scale=2.25, temperature
                 tok_emb = torch.cat([tok_emb, tok_emb], dim=0)
             h = torch.cat([cond_emb, tok_emb], dim=1)
 
+        model.freqs_cis = model.freqs_cis.to(h.device)
+        freqs_cis = model.freqs_cis[:h.shape[1]]
         for layer in model.layers:
-            h = layer(h)
+            h = layer(h, freqs_cis, None, None)
         h = model.norm(h)
         logits = model.output(h[:, -1:])
 
@@ -151,11 +153,14 @@ def main():
 
             # Stage 2: Fine Refinement
             if args.use_refiner:
-                tok_emb = backbone.tok_embeddings(coarse_tokens)
                 cond_emb = backbone.cls_embedding(cond, train=False)[:, :backbone.cls_token_num]
+                tok_emb = backbone.tok_embeddings(coarse_tokens)
                 h = torch.cat([cond_emb, tok_emb], dim=1)
+                h = backbone.tok_dropout(h) if hasattr(backbone, "tok_dropout") else h
+                backbone.freqs_cis = backbone.freqs_cis.to(h.device)
+                freqs_cis = backbone.freqs_cis[:h.shape[1]]
                 for layer in backbone.layers:
-                    h = layer(h)
+                    h = layer(h, freqs_cis, None, None)
                 token_h = backbone.norm(h)[:, backbone.cls_token_num:]
                 fine_logits = fine_refiner(token_h)
                 fine_tokens = fine_logits.argmax(dim=-1)
