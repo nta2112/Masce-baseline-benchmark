@@ -387,11 +387,10 @@ print(f'   -> Dung lượng: {os.path.getsize(INFER_CKPT)/1e6:.1f} MB')
 print('=' * 70)
 
 INFER_SCRIPT = f'{BENCHMARK_DIR}/baselines/06_ctf/ctf_infer.py'
+print('Đang cập nhật repository Benchmark (git pull) để tải mã nguồn mới nhất...')
+subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
 if not os.path.exists(INFER_SCRIPT):
-    print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
-    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
-    if not os.path.exists(INFER_SCRIPT):
-        INFER_SCRIPT = f'{WORK_DIR}/ctf_infer.py'
+    INFER_SCRIPT = f'{WORK_DIR}/ctf_infer.py'
 
 cmd = [
     'python', INFER_SCRIPT,
@@ -875,11 +874,10 @@ print(f'   -> Dung lượng: {os.path.getsize(INFER_CKPT)/1e6:.1f} MB')
 print('=' * 70)
 
 INFER_SCRIPT = f'{BENCHMARK_DIR}/baselines/06_ctf/ctf_masc_infer.py'
+print('Đang cập nhật repository Benchmark (git pull) để tải mã nguồn mới nhất...')
+subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
 if not os.path.exists(INFER_SCRIPT):
-    print('Đang cập nhật repository Benchmark để tải mã nguồn mới nhất...')
-    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
-    if not os.path.exists(INFER_SCRIPT):
-        INFER_SCRIPT = f'{WORK_DIR}/ctf_masc_infer.py'
+    INFER_SCRIPT = f'{WORK_DIR}/ctf_masc_infer.py'
 
 cmd = [
     'python', INFER_SCRIPT,

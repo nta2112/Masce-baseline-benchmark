@@ -236,8 +236,9 @@ def main():
             raw_backbone = backbone.module if is_dist else backbone
             bs = coarse_codes.shape[0]
 
+            # Forward pass through backbone with true autoregressive teacher forcing
             cond_emb = raw_backbone.cls_embedding(labels, train=raw_backbone.training)[:, :raw_backbone.cls_token_num]
-            token_emb = raw_backbone.tok_embeddings(coarse_codes)
+            token_emb = raw_backbone.tok_embeddings(coarse_codes[:, :-1])
             token_emb = torch.cat([cond_emb, token_emb], dim=1)
             h = raw_backbone.tok_dropout(token_emb) if hasattr(raw_backbone, "tok_dropout") else token_emb
             raw_backbone.freqs_cis = raw_backbone.freqs_cis.to(h.device)
@@ -247,14 +248,12 @@ def main():
                 h = layer(h, freqs_cis, None, None)
             h = raw_backbone.norm(h)
 
-            token_h = h[:, raw_backbone.cls_token_num:]
-            coarse_logits = raw_backbone.output(token_h)
-
-            # Coarse next-token loss
+            # Coarse next-token prediction: position t predicts coarse_codes[:, t]
+            coarse_logits = raw_backbone.output(h)
             coarse_loss = F.cross_entropy(coarse_logits.view(-1, k), coarse_codes.view(-1))
 
             # Fine refinement loss
-            fine_logits = fine_refiner(token_h)
+            fine_logits = fine_refiner(h)
             fine_loss = F.cross_entropy(fine_logits.view(-1, 16384), fine_codes.view(-1))
 
             loss = (coarse_loss + args.beta * fine_loss) / args.grad_accum

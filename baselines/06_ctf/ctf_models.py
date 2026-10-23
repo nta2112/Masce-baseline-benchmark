@@ -132,9 +132,9 @@ class CTFAutoregressiveModel(nn.Module):
         model = self.backbone
         bs = x.shape[0]
         
-        # Embeddings
+        # Embeddings with autoregressive teacher forcing
         cond_emb = model.cls_embedding(cond, train=model.training)[:, :model.cls_token_num]
-        token_emb = model.tok_embeddings(x)
+        token_emb = model.tok_embeddings(x[:, :-1])
         token_emb = torch.cat([cond_emb, token_emb], dim=1)
         h = model.tok_dropout(token_emb) if hasattr(model, "tok_dropout") else token_emb
         model.freqs_cis = model.freqs_cis.to(h.device)
@@ -145,13 +145,9 @@ class CTFAutoregressiveModel(nn.Module):
             h = layer(h, freqs_cis, None, None)
             
         h = model.norm(h)
-        # Token-level hidden states (skipping cls tokens)
-        token_h = h[:, model.cls_token_num:]
-        coarse_logits = model.output(token_h)
+        coarse_logits = model.output(h)
         
         # Compute coarse next-token loss
-        targets = x.clone()
-        targets = targets.contiguous()
-        coarse_loss = F.cross_entropy(coarse_logits.view(-1, self.k_coarse), targets.view(-1))
+        coarse_loss = F.cross_entropy(coarse_logits.view(-1, self.k_coarse), x.view(-1))
         
-        return coarse_logits, coarse_loss, token_h
+        return coarse_logits, coarse_loss, h
