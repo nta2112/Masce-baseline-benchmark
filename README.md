@@ -9,6 +9,7 @@ This repository contains the standalone benchmark modules and reproducible evalu
 4. **Method 4:** `04_randar` — RandAR (Random-Order Autoregressive Visual Generation, CVPR 2025 Oral).
 5. **Method 5:** `05_iar` — IAR (Cluster-Oriented Token Prediction, CVPR 2025 / ICML 2026 Table 3).
 6. **Method 6:** `06_ctf` — CTF (Coarse-to-Fine Token Prediction, CVPR 2025 / ICML 2026 Table 3).
+7. **Method 7:** `07_rar` — RAR (Randomized AutoRegressive Modeling, Yu et al., NeurIPS 2024 / ByteDance / Table 5 SOTA).
 
 ---
 
@@ -21,7 +22,8 @@ Benchmark/
 │   ├── 03_var/                  # VAR Next-Scale Runner & MASC integration
 │   ├── 04_randar/               # RandAR Baseline, k-Means, and MASC+UPipe
 │   ├── 05_iar/                  # IAR Baseline, k-Means, and MASC
-│   └── 06_ctf/                  # CTF Baseline, k-Means, and MASC
+│   ├── 06_ctf/                  # CTF Baseline, k-Means, and MASC
+│   └── 07_rar/                  # RAR Baseline, k-Means, and MASC+UPipe
 ├── configs/                     # Configs for models & training
 ├── notebooks/
 │   ├── notebook_base/           # Standalone Kaggle notebooks (ctf, iar, randar, var)
