@@ -253,7 +253,7 @@ CKPT_DIR          = f'{WORK_DIR}/checkpoints_rar_baseline'
 GPT_CKPT_PATH     = f'{WEIGHTS_DIR}/c2i_B_256.pt'
 
 # Đường dẫn checkpoint người dùng cung cấp nếu có
-USER_CKPT_PATH = ''
+USER_CKPT_PATH = '/kaggle/input/models/chienkhu/rar-compare-with-masc/pytorch/default/1/ckpt_rar_baseline_10class_final.pt'
 
 CKPT_CANDIDATES = [
     USER_CKPT_PATH,
@@ -267,7 +267,7 @@ if os.path.exists(CKPT_PATH):
     print(f'✅ ĐÃ CÓ SẴN CHECKPOINT: {CKPT_PATH}')
     print(f'   -> Dung lượng: {os.path.getsize(CKPT_PATH) / 1e6:.1f} MB')
     print('=' * 70)
-    print('⏩ BỎ QUA HUẤN LUYỆN! Chuyển thẳng sang CELL 6 để sinh ảnh.')
+    print('⏩ BỎ QUA HUẤN LUYỆN! Chuyển thẳng sang CELL 6 để kiểm tra ảnh mẫu.')
 else:
     TRAIN_SCRIPT = f'{BENCHMARK_DIR}/baselines/07_rar/train_rar_baseline.py'
     print('Đang cập nhật repository Benchmark (git pull) để nạp mã nguồn mới nhất...')
@@ -310,7 +310,7 @@ else:
         raise RuntimeError(f'❌ Lỗi trong quá trình huấn luyện! Mã thoát: {proc.returncode}')"""))
 
     cells.append(make_cell("code", """# ============================================================
-# CELL 6 — SINH 1,000 ẢNH MẪU TỪ RAR THUẦN (10-CLASS CÂN BẰNG)
+# CELL 6 — KIỂM TRA / SINH 1,000 ẢNH MẪU TỪ RAR THUẦN (10-CLASS CÂN BẰNG)
 # ============================================================
 import os, subprocess, glob, sys, shutil
 
@@ -321,50 +321,68 @@ WEIGHTS_DIR       = f'{WORK_DIR}/weights'
 CKPT_DIR          = f'{WORK_DIR}/checkpoints_rar_baseline'
 SAMPLE_NPZ        = f'{WORK_DIR}/samples_rar_baseline_1000.npz'
 
-USER_CKPT_PATH = ''
+USER_CKPT_PATH    = '/kaggle/input/models/chienkhu/rar-compare-with-masc/pytorch/default/1/ckpt_rar_baseline_10class_final.pt'
+USER_SAMPLE_NPZ   = '/kaggle/input/models/chienkhu/rar-compare-with-masc/pytorch/default/1/samples_rar_baseline_1000.npz'
 
-CKPT_CANDIDATES = [
-    USER_CKPT_PATH,
-    f'{CKPT_DIR}/ckpt_rar_baseline_10class_final.pt',
-] + glob.glob('/kaggle/input/**/ckpt_rar_baseline_10class_final.pt', recursive=True) + [
-    f'{WEIGHTS_DIR}/c2i_B_256.pt'  # Pretrained weights fallback
-]
+SAMPLE_CANDIDATES = [
+    USER_SAMPLE_NPZ,
+    SAMPLE_NPZ,
+] + glob.glob('/kaggle/input/**/samples_rar_baseline_1000.npz', recursive=True)
 
-CKPT_PATH = next((p for p in CKPT_CANDIDATES if p and os.path.exists(p) and os.path.getsize(p) > 10000000), f'{CKPT_DIR}/ckpt_rar_baseline_10class_final.pt')
+FOUND_SAMPLE = next((p for p in SAMPLE_CANDIDATES if p and os.path.exists(p) and os.path.getsize(p) > 1000000), None)
 
-print('=' * 70)
-print(f'✅ Sử dụng Checkpoint RAR Thuần: {CKPT_PATH}')
-print(f'   -> Dung lượng: {os.path.getsize(CKPT_PATH)/1e6:.1f} MB')
-print('=' * 70)
+if FOUND_SAMPLE:
+    print('=' * 70)
+    print(f'✅ ĐÃ CÓ SẴN FILE 1,000 ẢNH MẪU: {FOUND_SAMPLE}')
+    print(f'   -> Dung lượng: {os.path.getsize(FOUND_SAMPLE) / 1e6:.1f} MB')
+    if FOUND_SAMPLE != SAMPLE_NPZ:
+        shutil.copy(FOUND_SAMPLE, SAMPLE_NPZ)
+        print(f'   -> Đã sao chép sang: {SAMPLE_NPZ}')
+    print('=' * 70)
+    print('⏩ BỎ QUA SINH ẢNH! Chuyển thẳng sang CELL 7 để chạy đánh giá.')
+else:
+    CKPT_CANDIDATES = [
+        USER_CKPT_PATH,
+        f'{CKPT_DIR}/ckpt_rar_baseline_10class_final.pt',
+    ] + glob.glob('/kaggle/input/**/ckpt_rar_baseline_10class_final.pt', recursive=True) + [
+        f'{WEIGHTS_DIR}/c2i_B_256.pt'  # Pretrained weights fallback
+    ]
 
-INFER_SCRIPT = f'{BENCHMARK_DIR}/baselines/07_rar/rar_baseline_infer.py'
-print('Đang cập nhật repository Benchmark (git pull) để tải mã nguồn mới nhất...')
-subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
-if not os.path.exists(INFER_SCRIPT):
-    INFER_SCRIPT = f'{WORK_DIR}/rar_baseline_infer.py'
+    CKPT_PATH = next((p for p in CKPT_CANDIDATES if p and os.path.exists(p) and os.path.getsize(p) > 10000000), f'{CKPT_DIR}/ckpt_rar_baseline_10class_final.pt')
 
-cmd = [
-    'python', INFER_SCRIPT,
-    '--llama-repo',    LLAMA_DIR,
-    '--vq-ckpt',       f'{WEIGHTS_DIR}/vq_ds16_c2i.pt',
-    '--ckpt',          CKPT_PATH,
-    '--model',         'GPT-B',
-    '--num-samples',   '1000',
-    '--batch-size',    '32',
-    '--cfg',           '2.25',
-    '--temperature',   '1.0',
-    '--top-k',         '1000',
-    '--top-p',         '1.0',
-    '--out',           SAMPLE_NPZ
-]
+    print('=' * 70)
+    print(f'✅ Sử dụng Checkpoint RAR Thuần: {CKPT_PATH}')
+    print(f'   -> Dung lượng: {os.path.getsize(CKPT_PATH)/1e6:.1f} MB')
+    print('=' * 70)
 
-print('🚀 Đang sinh 1,000 ảnh với KV-cache tăng tốc (~90s)...')
-subprocess.run(' '.join(cmd), shell=True, check=True)"""))
+    INFER_SCRIPT = f'{BENCHMARK_DIR}/baselines/07_rar/rar_baseline_infer.py'
+    print('Đang cập nhật repository Benchmark (git pull) để tải mã nguồn mới nhất...')
+    subprocess.run(f'git -C {BENCHMARK_DIR} pull', shell=True)
+    if not os.path.exists(INFER_SCRIPT):
+        INFER_SCRIPT = f'{WORK_DIR}/rar_baseline_infer.py'
+
+    cmd = [
+        'python', INFER_SCRIPT,
+        '--llama-repo',    LLAMA_DIR,
+        '--vq-ckpt',       f'{WEIGHTS_DIR}/vq_ds16_c2i.pt',
+        '--ckpt',          CKPT_PATH,
+        '--model',         'GPT-B',
+        '--num-samples',   '1000',
+        '--batch-size',    '32',
+        '--cfg',           '2.25',
+        '--temperature',   '1.0',
+        '--top-k',         '1000',
+        '--top-p',         '1.0',
+        '--out',           SAMPLE_NPZ
+    ]
+
+    print('🚀 Đang sinh 1,000 ảnh với KV-cache tăng tốc (~90s)...')
+    subprocess.run(' '.join(cmd), shell=True, check=True)"""))
 
     cells.append(make_cell("code", """# ============================================================
 # CELL 7 — ĐÁNH GIÁ CHỈ SỐ: FID, INCEPTION SCORE, PRECISION, RECALL
 # ============================================================
-import subprocess, os, sys, re
+import subprocess, os, sys, re, glob, shutil
 
 WORK_DIR    = '/kaggle/working'
 LLAMA_DIR   = f'{WORK_DIR}/LlamaGen'
@@ -372,9 +390,28 @@ SAMPLE_NPZ  = f'{WORK_DIR}/samples_rar_baseline_1000.npz'
 REF_NPZ     = f'{WORK_DIR}/ref_batch_1000.npz'
 EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
 
-eval_cmd = f'CUDA_VISIBLE_DEVICES=0 python {EVAL_SCRIPT} {REF_NPZ} {SAMPLE_NPZ}'
+USER_SAMPLE_NPZ = '/kaggle/input/models/chienkhu/rar-compare-with-masc/pytorch/default/1/samples_rar_baseline_1000.npz'
+SAMPLE_CANDIDATES = [
+    SAMPLE_NPZ,
+    USER_SAMPLE_NPZ,
+] + glob.glob('/kaggle/input/**/samples_rar_baseline_1000.npz', recursive=True)
+SAMPLE_PATH = next((p for p in SAMPLE_CANDIDATES if p and os.path.exists(p) and os.path.getsize(p) > 1000000), SAMPLE_NPZ)
 
+REF_CANDIDATES = [
+    REF_NPZ,
+    f'{WORK_DIR}/ref_10class_balanced_1000.npz',
+    '/kaggle/input/models/chienkhu/rar-compare-with-masc/pytorch/default/1/ref_batch_1000.npz',
+    '/kaggle/input/ref-10class-balanced-1000/ref_10class_balanced_1000.npz',
+] + glob.glob('/kaggle/input/**/ref_batch_1000.npz', recursive=True) + glob.glob('/kaggle/input/**/ref_10class_balanced_1000.npz', recursive=True)
+REF_PATH = next((p for p in REF_CANDIDATES if p and os.path.exists(p) and os.path.getsize(p) > 1000000), REF_NPZ)
+
+eval_cmd = f'CUDA_VISIBLE_DEVICES=0 python {EVAL_SCRIPT} {REF_PATH} {SAMPLE_PATH}'
+
+print('=' * 70)
 print('Khởi chạy LlamaGen Official Evaluator (TensorFlow Inception-v3):')
+print(f'   Reference Batch: {REF_PATH}')
+print(f'   Sample Batch:    {SAMPLE_PATH}')
+print('=' * 70)
 print(eval_cmd)
 print('=' * 70)
 
