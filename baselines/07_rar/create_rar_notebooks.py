@@ -364,30 +364,89 @@ subprocess.run(' '.join(cmd), shell=True, check=True)"""))
     cells.append(make_cell("code", """# ============================================================
 # CELL 7 — ĐÁNH GIÁ CHỈ SỐ: FID, INCEPTION SCORE, PRECISION, RECALL
 # ============================================================
-import os, sys, subprocess, numpy as np
+import subprocess, os, sys, re
 
-WORK_DIR      = '/kaggle/working'
-LLAMA_DIR     = f'{WORK_DIR}/LlamaGen'
-SAMPLE_NPZ    = f'{WORK_DIR}/samples_rar_baseline_1000.npz'
-REF_NPZ       = f'{WORK_DIR}/ref_batch_1000.npz'
-EVAL_DIR      = f'{LLAMA_DIR}/evaluations/c2i'
+WORK_DIR    = '/kaggle/working'
+LLAMA_DIR   = f'{WORK_DIR}/LlamaGen'
+SAMPLE_NPZ  = f'{WORK_DIR}/samples_rar_baseline_1000.npz'
+REF_NPZ     = f'{WORK_DIR}/ref_batch_1000.npz'
+EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
+
+eval_cmd = f'CUDA_VISIBLE_DEVICES=0 python {EVAL_SCRIPT} {REF_NPZ} {SAMPLE_NPZ}'
+
+print('Khởi chạy LlamaGen Official Evaluator (TensorFlow Inception-v3):')
+print(eval_cmd)
+print('=' * 70)
+
+res = subprocess.run(eval_cmd, shell=True, text=True, capture_output=True)
+print(res.stdout)
+if res.stderr:
+    print('Log / Stderr:\\n', res.stderr[-500:])
+
+output_text = res.stdout
+
+def extract_metric(pattern, text, default=0.0):
+    m = re.search(pattern, text)
+    return float(m.group(1)) if m else default
+
+fid_score  = extract_metric(r'FID:\\s*([0-9.]+)', output_text)
+is_score   = extract_metric(r'Inception Score:\\s*([0-9.]+)', output_text)
+prec_score = extract_metric(r'Precision:\\s*([0-9.]+)', output_text)
+rec_score  = extract_metric(r'Recall:\\s*([0-9.]+)', output_text)
 
 print('=' * 70)
-print('📊 ĐÁNH GIÁ CHỈ SỐ CHẤT LƯỢNG SINH ẢNH: RAR THUẦN (FLAT AR N=16,384)')
-print('=' * 70)
+print(f'📊 KẾT QUẢ RAR THUẦN (FLAT AR N=16,384):')
+print(f'   FID       : {fid_score:.4f}')
+print(f'   IS        : {is_score:.4f}')
+print(f'   Precision : {prec_score:.4f}')
+print(f'   Recall    : {rec_score:.4f}')
+print('=' * 70)"""))
 
-eval_cmd = [
-    'python', f'{EVAL_DIR}/evaluator.py',
-    '--ref-batch', REF_NPZ,
-    '--sample-batch', SAMPLE_NPZ
+    cells.append(make_cell("code", """# ============================================================
+# CELL 8 — BẢNG ĐỐI SÁNH TOÀN DIỆN METHOD 7: RAR THUẦN vs RAR+KMEANS vs RAR+MASC+UPIPE
+# ============================================================
+import pandas as pd
+from tabulate import tabulate
+
+table_data = [
+    {
+        "Phương pháp": "RAR Thuần (Vanilla Flat AR)",
+        "Trường phái": "Permutation AR (N=16,384)",
+        "Prior": "Flat Codebook (Annealing r(t))",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": f"{fid_score:.2f}" if fid_score > 0 else "N/A",
+        "IS ↑": f"{is_score:.2f}" if is_score > 0 else "N/A",
+        "Precision ↑": f"{prec_score:.3f}" if prec_score > 0 else "N/A",
+        "Recall ↑": f"{rec_score:.3f}" if rec_score > 0 else "N/A"
+    },
+    {
+        "Phương pháp": "RAR + k-Means",
+        "Trường phái": "Coarse Permutation (k=4,096)",
+        "Prior": "Standard k-Means (Annealing r(t))",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": "N/A",
+        "IS ↑": "N/A",
+        "Precision ↑": "N/A",
+        "Recall ↑": "N/A"
+    },
+    {
+        "Phương pháp": "RAR + MASC + UPipe (Table 5 SOTA)",
+        "Trường phái": "Coarse Permutation (k=4,096)",
+        "Prior": "MASC Geodesic Tree (Table 5 SOTA)",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": "N/A",
+        "IS ↑": "N/A",
+        "Precision ↑": "N/A",
+        "Recall ↑": "N/A"
+    }
 ]
-try:
-    subprocess.run(' '.join(eval_cmd), shell=True, check=True)
-except Exception as e:
-    print(f'[Fallback Evaluation] Sử dụng torch-fidelity / scipy evaluator: {e}')
-    from cleanfid import fid
-    score = fid.compute_fid(SAMPLE_NPZ, REF_NPZ)
-    print(f'FID: {score:.4f}')"""))
+
+df = pd.DataFrame(table_data)
+print(tabulate(df, headers='keys', tablefmt='plain'))
+print('\\n' + '=' * 70)
+print('BẢNG MARKDOWN DÙNG CHO BÀI BÁO (LATEX / MARKDOWN REPORT):')
+print('=' * 70)
+print(tabulate(df, headers='keys', tablefmt='pipe'))"""))
 
     return {
         "cells": cells,
@@ -786,30 +845,89 @@ subprocess.run(' '.join(cmd), shell=True, check=True)"""))
     cells.append(make_cell("code", """# ============================================================
 # CELL 7 — ĐÁNH GIÁ CHỈ SỐ: FID, INCEPTION SCORE, PRECISION, RECALL
 # ============================================================
-import os, sys, subprocess, numpy as np
+import subprocess, os, sys, re
 
-WORK_DIR      = '/kaggle/working'
-LLAMA_DIR     = f'{WORK_DIR}/LlamaGen'
-SAMPLE_NPZ    = f'{WORK_DIR}/samples_rar_kmeans_1000.npz'
-REF_NPZ       = f'{WORK_DIR}/ref_batch_1000.npz'
-EVAL_DIR      = f'{LLAMA_DIR}/evaluations/c2i'
+WORK_DIR    = '/kaggle/working'
+LLAMA_DIR   = f'{WORK_DIR}/LlamaGen'
+SAMPLE_NPZ  = f'{WORK_DIR}/samples_rar_kmeans_1000.npz'
+REF_NPZ     = f'{WORK_DIR}/ref_batch_1000.npz'
+EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
+
+eval_cmd = f'CUDA_VISIBLE_DEVICES=0 python {EVAL_SCRIPT} {REF_NPZ} {SAMPLE_NPZ}'
+
+print('Khởi chạy LlamaGen Official Evaluator (TensorFlow Inception-v3):')
+print(eval_cmd)
+print('=' * 70)
+
+res = subprocess.run(eval_cmd, shell=True, text=True, capture_output=True)
+print(res.stdout)
+if res.stderr:
+    print('Log / Stderr:\\n', res.stderr[-500:])
+
+output_text = res.stdout
+
+def extract_metric(pattern, text, default=0.0):
+    m = re.search(pattern, text)
+    return float(m.group(1)) if m else default
+
+fid_score  = extract_metric(r'FID:\\s*([0-9.]+)', output_text)
+is_score   = extract_metric(r'Inception Score:\\s*([0-9.]+)', output_text)
+prec_score = extract_metric(r'Precision:\\s*([0-9.]+)', output_text)
+rec_score  = extract_metric(r'Recall:\\s*([0-9.]+)', output_text)
 
 print('=' * 70)
-print('📊 ĐÁNH GIÁ CHỈ SỐ CHẤT LƯỢNG SINH ẢNH: RAR + K-MEANS (k = 4,096)')
-print('=' * 70)
+print(f'📊 KẾT QUẢ RAR + K-MEANS (k=4,096):')
+print(f'   FID       : {fid_score:.4f}')
+print(f'   IS        : {is_score:.4f}')
+print(f'   Precision : {prec_score:.4f}')
+print(f'   Recall    : {rec_score:.4f}')
+print('=' * 70)"""))
 
-eval_cmd = [
-    'python', f'{EVAL_DIR}/evaluator.py',
-    '--ref-batch', REF_NPZ,
-    '--sample-batch', SAMPLE_NPZ
+    cells.append(make_cell("code", """# ============================================================
+# CELL 8 — BẢNG ĐỐI SÁNH TOÀN DIỆN METHOD 7: RAR THUẦN vs RAR+KMEANS vs RAR+MASC+UPIPE
+# ============================================================
+import pandas as pd
+from tabulate import tabulate
+
+table_data = [
+    {
+        "Phương pháp": "RAR Thuần (Vanilla Flat AR)",
+        "Trường phái": "Permutation AR (N=16,384)",
+        "Prior": "Flat Codebook (Annealing r(t))",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": "N/A",
+        "IS ↑": "N/A",
+        "Precision ↑": "N/A",
+        "Recall ↑": "N/A"
+    },
+    {
+        "Phương pháp": "RAR + k-Means",
+        "Trường phái": "Coarse Permutation (k=4,096)",
+        "Prior": "Standard k-Means (Annealing r(t))",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": f"{fid_score:.2f}" if fid_score > 0 else "N/A",
+        "IS ↑": f"{is_score:.2f}" if is_score > 0 else "N/A",
+        "Precision ↑": f"{prec_score:.3f}" if prec_score > 0 else "N/A",
+        "Recall ↑": f"{rec_score:.3f}" if rec_score > 0 else "N/A"
+    },
+    {
+        "Phương pháp": "RAR + MASC + UPipe (Table 5 SOTA)",
+        "Trường phái": "Coarse Permutation (k=4,096)",
+        "Prior": "MASC Geodesic Tree (Table 5 SOTA)",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": "N/A",
+        "IS ↑": "N/A",
+        "Precision ↑": "N/A",
+        "Recall ↑": "N/A"
+    }
 ]
-try:
-    subprocess.run(' '.join(eval_cmd), shell=True, check=True)
-except Exception as e:
-    print(f'[Fallback Evaluation] Sử dụng torch-fidelity / scipy evaluator: {e}')
-    from cleanfid import fid
-    score = fid.compute_fid(SAMPLE_NPZ, REF_NPZ)
-    print(f'FID: {score:.4f}')"""))
+
+df = pd.DataFrame(table_data)
+print(tabulate(df, headers='keys', tablefmt='plain'))
+print('\\n' + '=' * 70)
+print('BẢNG MARKDOWN DÙNG CHO BÀI BÁO (LATEX / MARKDOWN REPORT):')
+print('=' * 70)
+print(tabulate(df, headers='keys', tablefmt='pipe'))"""))
 
     return {
         "cells": cells,
@@ -1202,30 +1320,89 @@ subprocess.run(' '.join(cmd), shell=True, check=True)"""))
     cells.append(make_cell("code", """# ============================================================
 # CELL 7 — ĐÁNH GIÁ CHỈ SỐ: FID, INCEPTION SCORE, PRECISION, RECALL
 # ============================================================
-import os, sys, subprocess, numpy as np
+import subprocess, os, sys, re
 
-WORK_DIR      = '/kaggle/working'
-LLAMA_DIR     = f'{WORK_DIR}/LlamaGen'
-SAMPLE_NPZ    = f'{WORK_DIR}/samples_rar_masc_1000.npz'
-REF_NPZ       = f'{WORK_DIR}/ref_batch_1000.npz'
-EVAL_DIR      = f'{LLAMA_DIR}/evaluations/c2i'
+WORK_DIR    = '/kaggle/working'
+LLAMA_DIR   = f'{WORK_DIR}/LlamaGen'
+SAMPLE_NPZ  = f'{WORK_DIR}/samples_rar_masc_1000.npz'
+REF_NPZ     = f'{WORK_DIR}/ref_batch_1000.npz'
+EVAL_SCRIPT = f'{LLAMA_DIR}/evaluations/c2i/evaluator.py'
+
+eval_cmd = f'CUDA_VISIBLE_DEVICES=0 python {EVAL_SCRIPT} {REF_NPZ} {SAMPLE_NPZ}'
+
+print('Khởi chạy LlamaGen Official Evaluator (TensorFlow Inception-v3):')
+print(eval_cmd)
+print('=' * 70)
+
+res = subprocess.run(eval_cmd, shell=True, text=True, capture_output=True)
+print(res.stdout)
+if res.stderr:
+    print('Log / Stderr:\\n', res.stderr[-500:])
+
+output_text = res.stdout
+
+def extract_metric(pattern, text, default=0.0):
+    m = re.search(pattern, text)
+    return float(m.group(1)) if m else default
+
+fid_score  = extract_metric(r'FID:\\s*([0-9.]+)', output_text)
+is_score   = extract_metric(r'Inception Score:\\s*([0-9.]+)', output_text)
+prec_score = extract_metric(r'Precision:\\s*([0-9.]+)', output_text)
+rec_score  = extract_metric(r'Recall:\\s*([0-9.]+)', output_text)
 
 print('=' * 70)
-print('📊 ĐÁNH GIÁ CHỈ SỐ CHẤT LƯỢNG SINH ẢNH: RAR + MASC + UPIPE (k = 4,096)')
-print('=' * 70)
+print(f'📊 KẾT QUẢ RAR + MASC + UPIPE (k=4,096):')
+print(f'   FID       : {fid_score:.4f}')
+print(f'   IS        : {is_score:.4f}')
+print(f'   Precision : {prec_score:.4f}')
+print(f'   Recall    : {rec_score:.4f}')
+print('=' * 70)"""))
 
-eval_cmd = [
-    'python', f'{EVAL_DIR}/evaluator.py',
-    '--ref-batch', REF_NPZ,
-    '--sample-batch', SAMPLE_NPZ
+    cells.append(make_cell("code", """# ============================================================
+# CELL 8 — BẢNG ĐỐI SÁNH TOÀN DIỆN METHOD 7: RAR THUẦN vs RAR+KMEANS vs RAR+MASC+UPIPE
+# ============================================================
+import pandas as pd
+from tabulate import tabulate
+
+table_data = [
+    {
+        "Phương pháp": "RAR Thuần (Vanilla Flat AR)",
+        "Trường phái": "Permutation AR (N=16,384)",
+        "Prior": "Flat Codebook (Annealing r(t))",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": "N/A",
+        "IS ↑": "N/A",
+        "Precision ↑": "N/A",
+        "Recall ↑": "N/A"
+    },
+    {
+        "Phương pháp": "RAR + k-Means",
+        "Trường phái": "Coarse Permutation (k=4,096)",
+        "Prior": "Standard k-Means (Annealing r(t))",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": "N/A",
+        "IS ↑": "N/A",
+        "Precision ↑": "N/A",
+        "Recall ↑": "N/A"
+    },
+    {
+        "Phương pháp": "RAR + MASC + UPipe (Table 5 SOTA)",
+        "Trường phái": "Coarse Permutation (k=4,096)",
+        "Prior": "MASC Geodesic Tree (Table 5 SOTA)",
+        "Tokens/Ảnh": "256",
+        "10-Class FID ↓": f"{fid_score:.2f}" if fid_score > 0 else "N/A",
+        "IS ↑": f"{is_score:.2f}" if is_score > 0 else "N/A",
+        "Precision ↑": f"{prec_score:.3f}" if prec_score > 0 else "N/A",
+        "Recall ↑": f"{rec_score:.3f}" if rec_score > 0 else "N/A"
+    }
 ]
-try:
-    subprocess.run(' '.join(eval_cmd), shell=True, check=True)
-except Exception as e:
-    print(f'[Fallback Evaluation] Sử dụng torch-fidelity / scipy evaluator: {e}')
-    from cleanfid import fid
-    score = fid.compute_fid(SAMPLE_NPZ, REF_NPZ)
-    print(f'FID: {score:.4f}')"""))
+
+df = pd.DataFrame(table_data)
+print(tabulate(df, headers='keys', tablefmt='plain'))
+print('\\n' + '=' * 70)
+print('BẢNG MARKDOWN DÙNG CHO BÀI BÁO (LATEX / MARKDOWN REPORT):')
+print('=' * 70)
+print(tabulate(df, headers='keys', tablefmt='pipe'))"""))
 
     return {
         "cells": cells,
